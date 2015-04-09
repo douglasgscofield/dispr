@@ -1,4 +1,6 @@
 databases
 intervals
 primers
-test.fa
+test*.fa
+out.delta
+refs
