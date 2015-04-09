@@ -18,15 +18,28 @@ use Bio::Tools::SeqPattern;
 #"class1:F:CTNCAYVARCCYATGTAYYWYTTBYT"
 #"class1:R:GTYYTNACHCYRTAVAYRATRGGRTT"
 
-my @o_pf = qw/CTNCAYVARCCYATGTAYYWYTTBYT/;
-my @o_pr = qw/GTYYTNACHCYRTAVAYRATRGGRTT/;
+#my @o_pf = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class1:R:CTNCANWCNCCHATGTAYTTYYTBCT /;
+#my @o_pr = qw/ class2:F:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
+my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
+my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
+my $o_pi = 0;
+#>class1|F
+#CTNCAYVARCCYATGTAYYWYTTBYT
+#>class1|R
+#GTYYTNACHCYRTAVAYRATRGGRTT
+#>class2|F
+#CTNCANWCNCCHATGTAYTTYYTBCT
+#>class2|R
+#TTYCTBARRSTRTARATNADRGGRTT
+my $o_primers;
+my $o_multiplex = 0;
 my $o_orientation = "FR";
-my $o_multiplex = 1;
 my $o_min = 1;
 my $o_max = 4000;
+my $o_dir = "both";
+my $o_ref = "test.fa";
 my $o_bed = "out.bed";
 my $o_seq = "out.fa";
-my $o_ref = "test.fa";
 my $o_verbose;
 my $o_help;
 
@@ -40,8 +53,9 @@ are sought paired in specified orientations within a range given
 by --min and --max.  The amplicon is measured from the outer extent
 of each primer sequence, so includes the primer sequence length.
 
-    --pf FORWARD_PRIMER Forward primer sequence (may be specified more than once)
-    --pr REVERSE_PRIMER Reverse primer sequence (may be specified more than once)
+    --pf FORWARD_PRIMER   Forward primer sequence (may be specified more than once)
+    --pr REVERSE_PRIMER   Reverse primer sequence (may be specified more than once)
+    --pi INT              Index of preloaded primer [default $o_pi]
     --primers FILE        File containing primer pair(s), as forward/reverse
     --multiplex           If more than one primer pair presented, consider amplicons
                           produced by any possible primer pair (DEFAULT)
@@ -59,23 +73,38 @@ of each primer sequence, so includes the primer sequence length.
 
     --bed OUTPUT_BED      Output, BED file containing identified amplicon positions
     --seq OUTPUT_FASTA    Output, Fasta sequences containing identified amplicon sequences
+
     --verbose             Describe actions
+    --help                Produce this help
 
 ";
 
-GetOptions("pf=s"        => \@o_pf,
-           "pr=s"        => \@o_pr,
-           "ref=s"       => \$o_ref,
-           "verbose"     => \$o_verbose,
-           "help|?"      => \$o_help) or die $usage;
+GetOptions("pf=s"          => \@o_pf,
+           "pr=s"          => \@o_pr,
+           "pi=i"          => \$o_pi,
+           "primers=s"     => \$o_primers,
+           "multiplex"     => \$o_multiplex,
+           "no-multiplex"  => sub { $o_multiplex = 0 },
+           "orientation=s" => \$o_orientation,
+           "min=i"         => \$o_min,
+           "max=i"         => \$o_max,
+           "both"          => sub { $o_dir = "both" },
+           "forward"       => sub { $o_dir = "forward" },
+           "reverse"       => sub { $o_dir = "reverse" },
+           "ref=s"         => \$o_ref,
+           "bed=s"         => \$o_bed,
+           "seq=s"         => \$o_seq,
+           "verbose"       => \$o_verbose,
+           "help|?"        => \$o_help) or die $usage;
 die $usage if $o_help;
-die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
+#die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
 die "only FR orientation currently supported" if $o_orientation ne "FR";
+die "only both strands currently supported" if $o_dir ne "both";
 
 sub expand_dot($) {
     # would rather be explicit about '.'
     my $pat = shift;
-    $pat =~ s/\./[ACTG]/g;
+    $pat =~ s/\./[ACTGN]/g;
     return $pat;
 }
 
@@ -92,30 +121,42 @@ sub match_positions($$$$) {
     return @ans;
 }
 
-my $seq_pf = Bio::Seq->new(-seq => $o_pf[0], -alphabet => 'dna');
-my $seq_pr = Bio::Seq->new(-seq => $o_pr[0], -alphabet => 'dna');
-my $sp_pf = Bio::Tools::SeqPattern->new(-seq => $seq_pf->seq(), -type => 'dna');
-my $sp_pr = Bio::Tools::SeqPattern->new(-seq => $seq_pr->seq(), -type => 'dna');
-my $pat_pff = expand_dot($sp_pf->expand());
-my $pat_pfr = expand_dot($sp_pf->revcom(1)->expand());
-my $pat_prf = expand_dot($sp_pr->expand());
-my $pat_prr = expand_dot($sp_pr->revcom(1)->expand());
-$pat_pff = qr/$pat_pff/i;
-$pat_pfr = qr/$pat_pfr/i;
-$pat_prf = qr/$pat_prf/i;
-$pat_prr = qr/$pat_prr/i;
-print STDERR "pat_pff: $pat_pff   pat_pfr: $pat_pfr\n";
-print STDERR "pat_prf: $pat_prf   pat_prr: $pat_prr\n";
+sub prepare_primer($) {
+    my ($primer) = @_;
+    my %dest;
+    if (index($primer, ":") >= 0) {
+        my @p = split /:/, $primer;
+        die "format is   name:dir:sequence" if @p != 3;
+        $dest{name} = $p[0];
+        $dest{dir} = $p[1];
+        $primer = $p[2];
+    }
+    $dest{sequence} = $primer;
+    my $s = Bio::Seq->new(-seq => $primer, -alphabet => 'dna');
+    $dest{Seq} = $s;
+    my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
+    $dest{SeqPattern} = $seqpattern;
+    $dest{forwardpattern} = expand_dot($seqpattern->expand());
+    $dest{forwardquoted} = qr/$dest{forwardpattern}/i;
+    $dest{revcomppattern} = expand_dot($seqpattern->revcom(1)->expand());
+    $dest{revcompquoted} = qr/$dest{revcomppattern}/i;
+    my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
+    $dest{IUPAC} = $iupac;
+    $dest{count} = $iupac->count();
+    return %dest;
+}
 
-my $stream_pf = Bio::Tools::IUPAC->new(-seq => $seq_pf);
-my $stream_pr = Bio::Tools::IUPAC->new(-seq => $seq_pr);
-print STDERR "f: ".$stream_pf->count()." expanded sequences\n";
-print STDERR "f: ".$stream_pr->count()." expanded sequences\n";
 
+my %forward = prepare_primer($o_pf[$o_pi]);
+my %reverse = prepare_primer($o_pr[$o_pi]);
+
+print STDERR "forward: $forward{forwardpattern}, $forward{count} expanded sequences\n"
+print STDERR "reverse: $reverse{forwardpattern}, $reverse{count} expanded sequences\n"
 
 my $in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta');
 
 my $Un;
+
 while (my $inseq = $in->next_seq()) {
     my $seqname = $inseq->display_id();
     if ($seqname =~ /^chrUn/) {
@@ -124,7 +165,21 @@ while (my $inseq = $in->next_seq()) {
     } else {
         print STDERR "$seqname: searching ...\n";
     }
-    my @ff_hits = match_positions($seqname, "ff", $pat_pff, \$inseq->seq);
+    # any _forward_hits can be complemented by any _revcomp_hits
+    my @f_forward_hits = match_positions($forward{forwardquoted}, \$inseq->seq);
+    my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$inseq->seq);
+    my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$inseq->seq);
+    my @r_forward_hits = match_positions($reverse{forwardquoted}, \$inseq->seq);
+
+    # sort and remove duplicate hits that start at the same position
+    my @forward_hits = sort { $a->[0] <=> $b->[0] } (@f_forward_hits, @r_forward_hits);
+    my %seen;
+    @forward_hits = grep { !$seen{$_->[0]}++ } @forward_hits;
+    my @revcomp_hits = sort { $a->[0] <=> $b->[0] } (@f_revcomp_hits, @r_revcomp_hits);
+    undef %seen;
+    @revcomp_hits = grep { !$seen{$_->[0]}++ } @revcomp_hits;
+
+
     my @fr_hits = match_positions($seqname, "fr", $pat_pfr, \$inseq->seq);
     my @rf_hits = match_positions($seqname, "rf", $pat_prf, \$inseq->seq);
     my @rr_hits = match_positions($seqname, "rr", $pat_prr, \$inseq->seq);
