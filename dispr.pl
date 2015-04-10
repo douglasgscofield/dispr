@@ -35,10 +35,13 @@ my $o_pi = 0;
 my $o_primers;
 my $o_tag;
 my $o_primerhitsonly;
+my $o_primerbed;
+my $o_primerseq;
 my $o_multiplex = 0;
 my $o_orientation = "FR";
 my $o_min = 1;
-my $o_max = 4000;
+my $o_max = 1200;
+my $o_maxmax = 10000;
 my $o_dir = "both";
 my $o_ref;
 my $o_bed;
@@ -68,11 +71,15 @@ Primer and search parameters:
     --forward             CURRENTLY ONLY --both IS SUPPORTED
     --reverse
 
-Primer hits only:
+Primer hits:
 
-    --primer-hits-only    Search for primer sequences and write the hit 
-                          positions to the bed file and their sequences to the
-                          Fasta file.
+    --primer-hits-only    Report hits for primer sequences only.  If --bed
+                          and/or --seq is provided, these are treated as if
+                          they were --primer-bed and --primer-seq.
+    --primer-bed BED      Output, BED file containing hits for primer
+                          sequences found
+    --primer-seq FASTA    Output, Fasta sequences containing identified
+                          primer sequences
 
 Amplicons:
 
@@ -83,6 +90,7 @@ Amplicons:
                           amplicons produced by each primer pair
     --min bp              Minimum accepted size of amplicon [default $o_min]
     --max bp              Maximum accepted size of amplicon [default $o_max]
+    --maxmax bp           Maximum 'too-long' amplicon to track [default $o_maxmax]
 
 Input and output files:
 
@@ -111,10 +119,13 @@ GetOptions("pf=s"          => \@o_pf,
            "forward"       => sub { $o_dir = "forward" },
            "reverse"       => sub { $o_dir = "reverse" },
            "primer-hits-only" => \$o_primerhitsonly,
+           "primerbed=s"   => \$o_primerbed,
+           "primerseq=s"   => \$o_primerseq,
            "multiplex"     => \$o_multiplex,
            "no-multiplex"  => sub { $o_multiplex = 0 },
            "min=i"         => \$o_min,
            "max=i"         => \$o_max,
+           "maxmax=i"      => \$o_maxmax,
            "ref=s"         => \$o_ref,
            "bed=s"         => \$o_bed,
            "seq=s"         => \$o_seq,
@@ -124,13 +135,23 @@ die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
 die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
-die "only primer hits currently supported" if not $o_primerhitsonly;
+#die "only primer hits currently supported" if not $o_primerhitsonly;
+die "must provide --tag" if not $o_tag;
+
+if ($o_primerhitsonly) {
+    $o_primerbed ||= $o_bed;
+    $o_primerseq ||= $o_seq;
+    undef $o_bed;
+    undef $o_seq;
+}
 
 
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
 sub match_positions($$);  # search for primer
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
+sub dump_primer_hits($$$);  # dump primer-only intervals
+sub dump_amplicon_hits($$$$);  # calculate and dump amplicons
 
 
 my %forward = prepare_primer($o_pf[$o_pi]);
@@ -168,37 +189,46 @@ print STDERR "\n";
 
 print STDERR "\nProducing output for primer hits only (--primer-hits-only)\n\n" if $o_primerhitsonly;
 
-print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $o_bed and not $o_seq;
+print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $o_bed and not $o_seq and not $o_primerbed and not $o_primerseq;
 
 # open input, create output
-my ($in, $out_fasta, $out_bed);
+my ($in, $out_seq, $out_bed, $out_primerseq, $out_primerbed);
 
 $in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or 
     die "could not open input file '$o_ref': $!";
 if ($o_seq) {
-    $out_fasta = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or
+    $out_seq = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or
         die "could not open output Fasta file '$o_seq': $!";
 }
 if ($o_bed) {
     open($out_bed, ">$o_bed") or 
         die "could not open output BED file '$o_bed': $!";
 }
+if ($o_primerseq) {
+    $out_primerseq = Bio::SeqIO->new(-file => ">$o_primerseq", -format => 'fasta') or
+        die "could not open output Fasta file '$o_primerseq': $!";
+}
+if ($o_primerbed) {
+    open($out_primerbed, ">$o_primerbed") or 
+        die "could not open output BED file '$o_primerbed': $!";
+}
 
 my $Un;
 
 while (my $inseq = $in->next_seq()) {
-    my $seqname = $inseq->display_id();
-    if ($seqname =~ /^chrUn/) {
+    my $this_seqname = $inseq->display_id();
+    my $this_sequence = $inseq->seq();
+    if ($this_seqname =~ /^chrUn/) {
         print STDERR "chrUn*:".iftag()." searching ...\n" if not $Un;
         ++$Un;
     } else {
-        print STDERR "$seqname:".iftag()." searching ...\n";
+        print STDERR "$this_seqname:".iftag()." searching ...\n";
     }
     # any _forward_hits can be complemented by any _revcomp_hits
-    my @f_forward_hits = match_positions($forward{forwardquoted}, \$inseq->seq);
-    my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$inseq->seq);
-    my @r_forward_hits = match_positions($reverse{forwardquoted}, \$inseq->seq);
-    my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$inseq->seq);
+    my @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence);
+    my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence);
+    my @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence);
+    my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence);
 
     # sort and remove duplicate hits that start at the same position
     my @forward_hits = sort { $a->[0] <=> $b->[0] } (@f_forward_hits, @r_forward_hits);
@@ -208,46 +238,23 @@ while (my $inseq = $in->next_seq()) {
 
     next if not @forward_hits and not @revcomp_hits;  # no hits found
 
-    print STDERR $seqname.":".iftag().
+    print STDERR $this_seqname.":".iftag().
                  " forward hits ".scalar(@forward_hits)." ($n_forward_dups dups),".
                  " revcomp hits ".scalar(@revcomp_hits)." ($n_revcomp_dups dups)\n";
 
-    if ($o_primerhitsonly) {
-        # join hits, sort, produce bed intervals and Fasta file
-        my @all_hits = sort { $a->[0] <=> $b->[0] } ( @forward_hits, @revcomp_hits );
-        my $n_all_dups = remove_duplicate_intervals(\@all_hits);
-        print STDERR "$seqname:".iftag()." all hits ".scalar(@all_hits)." ($n_all_dups dups)\n";
+    dump_primer_hits($this_seqname, \@forward_hits, \@revcomp_hits);
 
-        foreach my $h (@all_hits) {
-            if ($o_bed) {
-                my $name = $h->[2];  # the hit sequence itself
-                $name = "$o_tag:$name" if $o_tag;
-                print $out_bed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
-            }
-            if ($o_seq) {
-                # use base-1 GFF-type intervals in Fasta name
-                my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
-                $name .= ":$o_tag" if $o_tag;
-                my $hitseq = Bio::Seq->new(-id => $name,
-                                           -seq => $h->[2],
-                                           -alphabed => 'dna');
-                $out_fasta->write_seq($hitseq);
-            }
-        }
+    next if $o_primerhitsonly;
 
-        next;  # primers only, skip to the next input sequence
-    }
+    dump_amplicon_hits($this_seqname, \$this_sequence, \@forward_hits, \@revcomp_hits);
 
-    # calculate amplicon intervals, produce bed intervals
-    #foreach (@all_hits) {
-    #    my ($name, $tag, $beg, $end, $hit) = @$_;
-    #    print STDERR "main: $name   $tag   $beg-$end   $hit\n";
-    #}
 }
 
-$in->close();
-$out_fasta->close();
-$out_bed->close();
+$in->close() if $in;
+$out_seq->close() if $out_seq;
+$out_bed->close() if $out_bed;
+$out_primerseq->close() if $out_primerseq;
+$out_primerbed->close() if $out_primerbed;
 
 
 # ---- local subroutines ----------------------------------- 
@@ -351,3 +358,83 @@ sub remove_duplicate_intervals($) {
 
 
 
+# Dump hits for primer sequences, if requested.  Join hits, sort,
+# produce BED and Fasta files.
+#
+sub dump_primer_hits($$$) {
+    my ($seqname, $forward_hits, $revcomp_hits) = @_;
+
+    return if not $o_primerbed and not $o_primerseq;
+
+    my @all_hits = sort { $a->[0] <=> $b->[0] } ( @$forward_hits, @$revcomp_hits );
+    my $n_all_dups = remove_duplicate_intervals(\@all_hits);
+    print STDERR "dump_primer_hits: $seqname:".iftag()." all hits ".
+                 scalar(@all_hits)." ($n_all_dups dups)\n" if $o_verbose;
+
+    foreach my $h (@all_hits) {
+        if ($o_primerbed) {
+            my $name = $h->[2];  # the hit sequence itself
+            $name = "$o_tag:$name" if $o_tag;
+            print $out_primerbed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
+        }
+        if ($o_primerseq) {
+            # use base-1 GFF-type intervals in Fasta name
+            my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
+            $name .= ":$o_tag" if $o_tag;
+            my $hitseq = Bio::Seq->new(-id => $name,
+                                       -seq => $h->[2],
+                                       -alphabed => 'dna');
+            $out_primerseq->write_seq($hitseq);
+        }
+    }
+}
+
+
+
+sub dump_amplicon_hits($$$$) {
+    my ($seqname, $sequence, $forward_hits, $revcomp_hits) = @_;
+    # intervals extend between forward_hits->[0] and revcomp_hits->[1]
+    # calculate amplicon intervals, produce bed intervals
+    my @amp_short; # too short  0 <=      < $o_min
+    my @amp_long; # too long   $o_max <  <= $o_maxmax
+    my @amp; # just right $o_min <= <= $o_max
+    foreach my $f (@$forward_hits) {
+        foreach my $r (@$revcomp_hits) {
+            next if $r->[0] < $f->[1];  # at least de-overlap the primers
+            my ($beg, $end) = ( $f->[0], $r->[1] );
+            my $amp_len = $end - $beg;
+            next if $amp_len < 0 or $amp_len > $o_maxmax;
+            my $amplicon = substr($$sequence, $beg, $end - $beg);
+            my $arr = [ $beg, $end, $amplicon ];
+            if ($amp_len < $o_min) {
+                push @amp_short, $arr;
+            } elsif ($amp_len > $o_max) {
+                push @amp_long, $arr;
+            } else {
+                push @amp, $arr;
+            }
+        }
+    }
+    my $n_dup = remove_duplicate_intervals(\@amp);
+    my $n_short_dup = remove_duplicate_intervals(\@amp_short);
+    my $n_long_dup = remove_duplicate_intervals(\@amp_long);
+    print STDERR $seqname.":".iftag().
+                 " baby ".scalar(@amp)." ($n_dup dups),".
+                 " short ".scalar(@amp_short)." ($n_short_dup dups),".
+                 " long ".scalar(@amp_long)." ($n_long_dup dups)\n";
+
+    foreach my $h (@amp) {
+        if ($o_bed) {
+            my $name = "$o_tag:".length($h->[2]);
+            print $out_bed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
+        }
+        if ($o_seq) {
+            # use base-1 GFF-type intervals in Fasta name
+            my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$o_tag:".length($h->[2]);
+            my $hitseq = Bio::Seq->new(-id => $name,
+                                       -seq => $h->[2],
+                                       -alphabed => 'dna');
+            $out_seq->write_seq($hitseq);
+        }
+    }
+}

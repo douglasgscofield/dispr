@@ -4,5 +4,5 @@ primers
 test*.fa
 out.delta
 refs
-c?.fa
-c?.bed
+c?_*.fa
+c?_*.bed
