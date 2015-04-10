@@ -109,14 +109,14 @@ sub expand_dot($) {
 }
 
 # http://stackoverflow.com/questions/87380/how-can-i-find-the-location-of-a-regex-match-in-perl
-sub match_positions($$$$) {
-    my ($name, $tag, $pat, $seq) = @_;
+sub match_positions($$) {
+    my ($pat, $seq) = @_;
     my @ans;
     while ($$seq =~ /$pat/ig) {
         my ($beg, $end) = ($-[0], $+[0]);
         my $hit = substr($$seq, $beg, $end - $beg);
-        print STDERR "match_positions: name: $name   $tag   $beg-$end   $hit\n" if $o_verbose;
-        push @ans, [$name, $tag, $beg, $end, $hit];
+        print STDERR "match_positions: $beg-$end   $hit\n" if $o_verbose;
+        push @ans, [$beg, $end, $hit];
     }
     return @ans;
 }
@@ -150,8 +150,8 @@ sub prepare_primer($) {
 my %forward = prepare_primer($o_pf[$o_pi]);
 my %reverse = prepare_primer($o_pr[$o_pi]);
 
-print STDERR "forward: $forward{forwardpattern}, $forward{count} expanded sequences\n"
-print STDERR "reverse: $reverse{forwardpattern}, $reverse{count} expanded sequences\n"
+print STDERR "forward: $forward{forwardpattern}, $forward{count} expanded sequences\n";
+print STDERR "reverse: $reverse{forwardpattern}, $reverse{count} expanded sequences\n";
 
 my $in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta');
 
@@ -173,24 +173,27 @@ while (my $inseq = $in->next_seq()) {
 
     # sort and remove duplicate hits that start at the same position
     my @forward_hits = sort { $a->[0] <=> $b->[0] } (@f_forward_hits, @r_forward_hits);
+    my $n = @forward_hits;
     my %seen;
-    @forward_hits = grep { !$seen{$_->[0]}++ } @forward_hits;
+    @forward_hits = grep { ! $seen{$_->[0]}++ } @forward_hits;
+    my $n_forward_dups = $n - @forward_hits;
     my @revcomp_hits = sort { $a->[0] <=> $b->[0] } (@f_revcomp_hits, @r_revcomp_hits);
+    $n = @revcomp_hits;
     undef %seen;
-    @revcomp_hits = grep { !$seen{$_->[0]}++ } @revcomp_hits;
+    @revcomp_hits = grep { ! $seen{$_->[0]}++ } @revcomp_hits;
+    my $n_revcomp_dups = $n - @revcomp_hits;
 
-
-    my @fr_hits = match_positions($seqname, "fr", $pat_pfr, \$inseq->seq);
-    my @rf_hits = match_positions($seqname, "rf", $pat_prf, \$inseq->seq);
-    my @rr_hits = match_positions($seqname, "rr", $pat_prr, \$inseq->seq);
-    my @all_hits = sort { $a->[2] <=> $b->[2] } ( @ff_hits, @fr_hits, @rf_hits, @rr_hits );
     #my @hits = match_positions($seqname, "AACCCTACCTAAACCTCA", \$inseq->seq);
     #my @hits = match_positions($seqname, "CTCTACCCCAACCCC", \$inseq->seq);
-    print STDERR "$seqname found ".scalar(@ff_hits)." ff hits, ".scalar(@fr_hits)." fr hits\n" if $o_verbose;
-    foreach (@all_hits) {
-        my ($name, $tag, $beg, $end, $hit) = @$_;
-        print STDERR "main: $name   $tag   $beg-$end   $hit\n";
+    if ($o_verbose) {
+        print STDERR "$seqname found ".scalar(@forward_hits)." forward hits (".
+                     $n_forward_dups, " dups), and ".scalar(@revcomp_hits).
+                     " revcomp hits (".$n_revcomp_dups." dups)\n";
     }
+    #foreach (@all_hits) {
+    #    my ($name, $tag, $beg, $end, $hit) = @$_;
+    #    print STDERR "main: $name   $tag   $beg-$end   $hit\n";
+    #}
 }
 
 
