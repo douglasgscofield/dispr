@@ -1,12 +1,5 @@
 #!/usr/bin/env perl
 
-# TODO: multiple primers
-# DONE: remove duplicate hits
-# TODO: allow for settable number of mismatches... how?
-# TODO: fuzzy matching?
-# TODO: identify intervals
-# DONE: produce hits for primers only
-
 use strict;
 use warnings;
 
@@ -34,7 +27,6 @@ my $o_pi = 0;
 #TTYCTBARRSTRTARATNADRGGRTT
 my $o_primers;
 my $o_tag;
-my $o_primerhitsonly;
 my $o_primerbed;
 my $o_primerseq;
 my $o_multiplex = 0;
@@ -71,16 +63,6 @@ Primer and search parameters:
     --forward             CURRENTLY ONLY --both IS SUPPORTED
     --reverse
 
-Primer hits:
-
-    --primer-hits-only    Report hits for primer sequences only.  If --bed
-                          and/or --seq is provided, these are treated as if
-                          they were --primer-bed and --primer-seq.
-    --primer-bed BED      Output, BED file containing hits for primer
-                          sequences found
-    --primer-seq FASTA    Output, Fasta sequences containing identified
-                          primer sequences
-
 Amplicons:
 
     --multiplex           If more than one primer pair presented, consider 
@@ -101,6 +83,10 @@ Input and output files:
                           positions
     --seq OUTPUT_FASTA    Output, Fasta sequences containing identified
                           amplicon sequences
+    --primer-bed BED      Output, BED file containing hits for primer
+                          sequences found
+    --primer-seq FASTA    Output, Fasta sequences containing identified
+                          primer sequences
 
 Misc:
 
@@ -118,7 +104,6 @@ GetOptions("pf=s"          => \@o_pf,
            "both"          => sub { $o_dir = "both" },
            "forward"       => sub { $o_dir = "forward" },
            "reverse"       => sub { $o_dir = "reverse" },
-           "primer-hits-only" => \$o_primerhitsonly,
            "primerbed=s"   => \$o_primerbed,
            "primerseq=s"   => \$o_primerseq,
            "multiplex"     => \$o_multiplex,
@@ -135,16 +120,7 @@ die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
 die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
-#die "only primer hits currently supported" if not $o_primerhitsonly;
 die "must provide --tag" if not $o_tag;
-
-if ($o_primerhitsonly) {
-    $o_primerbed ||= $o_bed;
-    $o_primerseq ||= $o_seq;
-    undef $o_bed;
-    undef $o_seq;
-}
-
 
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
