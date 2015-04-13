@@ -141,7 +141,7 @@ if ($o_mismatch_simple) {
 
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
-sub apply_mismatch_simple($);  # prepare query sequence for mismatches
+sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub match_positions($$);  # search for primer
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
@@ -180,8 +180,6 @@ print STDERR iftags()."forward rc: $forward{revcomppattern}, same number in reve
 print STDERR iftags()."reverse   : $reverse{forwardpattern}, $reverse{count} expanded sequences\n";
 print STDERR iftags()."reverse rc: $reverse{revcomppattern}, same number in reverse complement\n";
 print STDERR "\n";
-
-print STDERR "\nProducing output for primer hits only (--primer-hits-only)\n\n" if $o_primerhitsonly;
 
 print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $o_bed and not $o_seq and not $o_primerbed and not $o_primerseq;
 
@@ -237,8 +235,6 @@ while (my $inseq = $in->next_seq()) {
                  " revcomp hits ".scalar(@revcomp_hits)." ($n_revcomp_dups dups)\n";
 
     dump_primer_hits($this_seqname, \@forward_hits, \@revcomp_hits);
-
-    next if $o_primerhitsonly;
 
     dump_amplicon_hits($this_seqname, \$this_sequence, \@forward_hits, \@revcomp_hits);
 
@@ -317,15 +313,27 @@ sub prepare_primer($) {
 
 
 
-sub apply_mismatch_simple($) {
-    my ($p) = @_;  # reference to primer hash
-    # extract primer sequence
-    # loop through mismatch number and 5' base number
-    # for each type of mismatch, create new regex
-    # match against genome
-    # sort and deduplicate matches
-    # Ultimately this will probably be a preprocessor for prepare_primer()
-    # Ultimately this will probably be a preprocessor for prepare_primer()
+sub apply_mismatch_simple($$$$) {
+    my ($p, $mm, $len, $is_rc) = @_;
+    print STDERR "p = $p, mm = $mm, len = $len, is_rc = $is_rc\n";
+    my ($ss, $tail);
+    if ($is_rc) {
+        $ss = substr($p, -$len);   $tail = substr($p, 0, length($p) - $len);
+    } else {
+        $ss = substr($p, 0, $len); $tail = substr($p, $len);
+    }
+    print STDERR "ss = $ss, tail = $tail\n";
+    my @p;
+    for (my $i = 0; $i < $len; ++$i) {
+        my $sss = $ss;
+        substr($sss, $i, 1) = "N";
+        my $sp = Bio::Tools::SeqPattern->new(-seq => $sss, -type => 'dna');
+        my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+        print STDERR "i = $i, pat = $pat\n";
+        push @p, $pat;
+    }
+    my $mm_pat = '(' . join('|', @p) . ')';
+    return $is_rc ? ($tail . $mm_pat) : ($mm_pat . $tail);
 }
 
 
