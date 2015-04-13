@@ -41,6 +41,10 @@ my $o_seq;
 my $o_verbose;
 my $o_help;
 
+my $o_mismatch_simple;
+my $o_mismatch_simple_int1;
+my $o_mismatch_simple_int2;
+
 
 my $usage = "
 $0  [ OPTIONS ] --ref fasta-file.fa
@@ -62,6 +66,11 @@ Primer and search parameters:
     --both                Orientation of the reference sequence to search
     --forward             CURRENTLY ONLY --both IS SUPPORTED
     --reverse
+
+    --mismatch-simple INT1:INT2     Allow up to INT1 mismatches in 5'-most
+                          INT2 bp of each primer.  INT1 must be <= 2, and
+                          INT2 must be <= 5.  To allow up to 2 mismatches in
+                          the 5'-most 5 bp:  --mismatch-simple 2:5
 
 Amplicons:
 
@@ -104,6 +113,7 @@ GetOptions("pf=s"          => \@o_pf,
            "both"          => sub { $o_dir = "both" },
            "forward"       => sub { $o_dir = "forward" },
            "reverse"       => sub { $o_dir = "reverse" },
+           "mismatch-simple=s" => $o_mismatch_simple,
            "primerbed=s"   => \$o_primerbed,
            "primerseq=s"   => \$o_primerseq,
            "multiplex"     => \$o_multiplex,
@@ -122,8 +132,16 @@ die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
 die "must provide --tag" if not $o_tag;
 
+if ($o_mismatch_simple) {
+    ($o_mismatch_simple_int1, $o_mismatch_simple_int2) = split(/:/, $o_mismatch_simple, 2);
+    die "unable to interpret --mismatch-simple argument" if not $o_mismatch_simple_int1 or not $o_mismatch_simple_int2;
+    die "must allow <= 2 mismatches" if $o_mismatch_simple_int1 > 2;
+    die "must span <= 5 5' bases" if $o_mismatch_simple_int2 > 5;
+}
+
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
+sub apply_mismatch_simple($);  # prepare query sequence for mismatches
 sub match_positions($$);  # search for primer
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
@@ -295,6 +313,19 @@ sub prepare_primer($) {
     $dest{IUPAC} = $iupac;
     $dest{count} = $iupac->count();
     return %dest;
+}
+
+
+
+sub apply_mismatch_simple($) {
+    my ($p) = @_;  # reference to primer hash
+    # extract primer sequence
+    # loop through mismatch number and 5' base number
+    # for each type of mismatch, create new regex
+    # match against genome
+    # sort and deduplicate matches
+    # Ultimately this will probably be a preprocessor for prepare_primer()
+    # Ultimately this will probably be a preprocessor for prepare_primer()
 }
 
 
