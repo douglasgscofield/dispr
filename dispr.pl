@@ -16,7 +16,7 @@ use Bio::Tools::SeqPattern;
 #my @o_pr = qw/ class2:F:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
 my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
 my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
-my $o_pi = 0;
+my $o_pi = 1;  # 1 - 1 = 0
 #>class1|F
 #CTNCAYVARCCYATGTAYYWYTTBYT
 #>class1|R
@@ -38,12 +38,13 @@ my $o_dir = "both";
 my $o_ref;
 my $o_bed;
 my $o_seq;
+my $o_expand_dot = 0;
 my $o_verbose;
 my $o_help;
 
 my $o_mismatch_simple;
-my $o_mismatch_simple_int1;
-my $o_mismatch_simple_int2;
+my $o_mm_int1;
+my $o_mm_int2;
 
 
 my $usage = "
@@ -60,17 +61,21 @@ Primer and search parameters:
     --pf FORWARD_PRIMER   Forward primer sequence (may be specified 2+ times)
     --pr REVERSE_PRIMER   Reverse primer sequence (may be specified 2+ times)
     --pi INT              Index of preloaded primer [default $o_pi]
+         1: class 1 f $o_pf[0]  r $o_pr[0]
+         2: class 2 f $o_pf[1]  r $o_pr[1]
     --primers FILE        File containing primer pair(s), as forward/reverse
+                          (CURRENTLY UNSUPPORTED)
     --tag TAG             String added as tag to output
     --orientation FR      Orientation of primers, only FR supported for now
     --both                Orientation of the reference sequence to search
     --forward             CURRENTLY ONLY --both IS SUPPORTED
     --reverse
 
-    --mismatch-simple INT1:INT2     Allow up to INT1 mismatches in 5'-most
-                          INT2 bp of each primer.  INT1 must be <= 2, and
-                          INT2 must be <= 5.  To allow up to 2 mismatches in
-                          the 5'-most 5 bp:  --mismatch-simple 2:5
+    --mismatch-simple INT1:INT2
+                          Allow up to INT1 mismatches in 5'-most INT2 bp of 
+                          each primer.  INT1 must be <= 3 and INT2 must be
+                          <= 7.  To allow up to 2 mismatches in the 5'-most
+                          5 bp:  --mismatch-simple 2:5
 
 Amplicons:
 
@@ -99,6 +104,7 @@ Input and output files:
 
 Misc:
 
+    --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --verbose             Describe actions
     --help                Produce this help
 
@@ -113,9 +119,9 @@ GetOptions("pf=s"          => \@o_pf,
            "both"          => sub { $o_dir = "both" },
            "forward"       => sub { $o_dir = "forward" },
            "reverse"       => sub { $o_dir = "reverse" },
-           "mismatch-simple=s" => $o_mismatch_simple,
-           "primerbed=s"   => \$o_primerbed,
-           "primerseq=s"   => \$o_primerseq,
+           "mismatch-simple=s" => \$o_mismatch_simple,
+           "primer-bed=s"  => \$o_primerbed,
+           "primer-seq=s"  => \$o_primerseq,
            "multiplex"     => \$o_multiplex,
            "no-multiplex"  => sub { $o_multiplex = 0 },
            "min=i"         => \$o_min,
@@ -125,18 +131,20 @@ GetOptions("pf=s"          => \@o_pf,
            "bed=s"         => \$o_bed,
            "seq=s"         => \$o_seq,
            "verbose"       => \$o_verbose,
+           "expand-dot"    => \$o_expand_dot,
            "help|?"        => \$o_help) or die $usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
 die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
-die "must provide --tag" if not $o_tag;
+die "must provide results name --tag" if not $o_tag;
+die "must provide sequence to search with --ref" if not $o_ref;
 
 if ($o_mismatch_simple) {
-    ($o_mismatch_simple_int1, $o_mismatch_simple_int2) = split(/:/, $o_mismatch_simple, 2);
-    die "unable to interpret --mismatch-simple argument" if not $o_mismatch_simple_int1 or not $o_mismatch_simple_int2;
-    die "must allow <= 2 mismatches" if $o_mismatch_simple_int1 > 2;
-    die "must span <= 5 5' bases" if $o_mismatch_simple_int2 > 5;
+    ($o_mm_int1, $o_mm_int2) = split(/:/, $o_mismatch_simple, 2);
+    die "unable to interpret --mismatch-simple argument" if not $o_mm_int1 or not $o_mm_int2;
+    die "must allow <= 3 mismatches" if $o_mm_int1 > 3;
+    die "must span <= 7 5' bases" if $o_mm_int2 > 7;
 }
 
 sub expand_dot($);  # expand '.' in DNA regex
@@ -148,8 +156,8 @@ sub dump_primer_hits($$$);  # dump primer-only intervals
 sub dump_amplicon_hits($$$$);  # calculate and dump amplicons
 
 
-my %forward = prepare_primer($o_pf[$o_pi]);
-my %reverse = prepare_primer($o_pr[$o_pi]);
+my %forward = prepare_primer($o_pf[$o_pi - 1]);
+my %reverse = prepare_primer($o_pr[$o_pi - 1]);
 
 print STDERR "Assuming primer orientation '$o_orientation' as so, for example primers:
 
@@ -258,7 +266,7 @@ $out_primerbed->close() if $out_primerbed;
 #
 sub expand_dot($) {
     my $pat = shift;
-    $pat =~ s/\./[ACTGN]/g;
+    $pat =~ s/\./[ACTGN]/g if $o_expand_dot;
     return $pat;
 }
 
@@ -301,9 +309,21 @@ sub prepare_primer($) {
     $dest{Seq} = $s;
     my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
     $dest{SeqPattern} = $seqpattern;
-    $dest{forwardpattern} = expand_dot($seqpattern->expand());
+    if ($o_mismatch_simple) {
+        $dest{forwardpattern} = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 0);
+        $dest{revcomppattern} = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 1);
+        $dest{mismatch} = $o_mismatch_simple;
+        $dest{forward0} = expand_dot($seqpattern->expand());
+        $dest{revcomp0} = expand_dot($seqpattern->revcom(1)->expand());
+        print STDERR "forwardpattern    $dest{forwardpattern}\n" if $o_verbose;
+        print STDERR "revcomppattern    $dest{revcomppattern}\n" if $o_verbose;
+        print STDERR "forward0          $dest{forward0}\n" if $o_verbose;
+        print STDERR "revcomp0          $dest{revcomp0}\n" if $o_verbose;
+    } else {
+        $dest{forwardpattern} = expand_dot($seqpattern->expand());
+        $dest{revcomppattern} = expand_dot($seqpattern->revcom(1)->expand());
+    }
     $dest{forwardquoted} = qr/$dest{forwardpattern}/i;
-    $dest{revcomppattern} = expand_dot($seqpattern->revcom(1)->expand());
     $dest{revcompquoted} = qr/$dest{revcomppattern}/i;
     my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
     $dest{IUPAC} = $iupac;
@@ -314,26 +334,72 @@ sub prepare_primer($) {
 
 
 sub apply_mismatch_simple($$$$) {
-    my ($p, $mm, $len, $is_rc) = @_;
-    print STDERR "p = $p, mm = $mm, len = $len, is_rc = $is_rc\n";
-    my ($ss, $tail);
-    if ($is_rc) {
-        $ss = substr($p, -$len);   $tail = substr($p, 0, length($p) - $len);
-    } else {
-        $ss = substr($p, 0, $len); $tail = substr($p, $len);
-    }
-    print STDERR "ss = $ss, tail = $tail\n";
+    my ($p, $m, $len, $is_rc) = @_;
+    print STDERR "p = $p, m = $m, len = $len, is_rc = $is_rc\n";
+    my ($head, $tail);
+    #if ($is_rc) {
+    #    $head = substr($p, -$len);   $tail = substr($p, 0, length($p) - $len);
+    #} else {
+        $head = substr($p, 0, $len); $tail = substr($p, $len);
+    #}
+    die "no tail available" if not $tail;
+    print STDERR "head = $head, tail = $tail\n" if $o_verbose;
     my @p;
-    for (my $i = 0; $i < $len; ++$i) {
-        my $sss = $ss;
-        substr($sss, $i, 1) = "N";
-        my $sp = Bio::Tools::SeqPattern->new(-seq => $sss, -type => 'dna');
-        my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
-        print STDERR "i = $i, pat = $pat\n";
-        push @p, $pat;
+    if ($m == 3) {
+        for (my $i = 0; $i < $len - 2; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            for (my $j = $i + 1; $j < $len - 1; ++$j) {
+                my $ss = $s;
+                substr($ss, $j, 1) = "N";
+                for (my $k = $j + 1; $k < $len; ++$k) {
+                    my $sss = $ss;
+                    substr($sss, $k, 1) = "N";
+                    my $sp = Bio::Tools::SeqPattern->new(-seq => $sss, -type => 'dna');
+                    my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                    print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                    push @p, $pat;
+                }
+            }
+        }
+    } elsif ($m == 2) {
+        for (my $i = 0; $i < $len - 1; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            for (my $j = $i + 1; $j < $len; ++$j) {
+                my $ss = $s;
+                substr($ss, $j, 1) = "N";
+                my $sp = Bio::Tools::SeqPattern->new(-seq => $ss, -type => 'dna');
+                my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                push @p, $pat;
+            }
+        }
+    } elsif ($m == 1) {
+        for (my $i = 0; $i < $len; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            my $sp = Bio::Tools::SeqPattern->new(-seq => $s, -type => 'dna');
+            my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+            print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+            push @p, $pat;
+        }
+    } else {
+        die "unrecognised number of mismatches $m";
     }
-    my $mm_pat = '(' . join('|', @p) . ')';
-    return $is_rc ? ($tail . $mm_pat) : ($mm_pat . $tail);
+    @p = reverse @p if $is_rc;
+    my $m_pat = '(' . join('|', @p) . ')';
+    my $tp = Bio::Tools::SeqPattern->new(-seq => $tail, -type => 'dna');
+    my ($tailpat, $fullpat);
+    if ($is_rc) {
+        $tailpat = expand_dot($tp->revcom(1)->expand());
+        $fullpat = $tailpat . $m_pat;
+    } else {
+        $tailpat = expand_dot($tp->expand());
+        $fullpat = $m_pat . $tailpat;
+    }
+    print STDERR "m_pat = $m_pat, tailpat = $tailpat, fullpat = $fullpat\n" if $o_verbose;
+    return $fullpat;
 }
 
 
@@ -390,7 +456,8 @@ sub dump_primer_hits($$$) {
         if ($o_primerbed) {
             my $name = $h->[2];  # the hit sequence itself
             $name = "$o_tag:$name" if $o_tag;
-            print $out_primerbed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
+            #print $out_primerbed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
+            $out_primerbed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_primerseq) {
             # use base-1 GFF-type intervals in Fasta name
@@ -434,14 +501,15 @@ sub dump_amplicon_hits($$$$) {
     my $n_short_dup = remove_duplicate_intervals(\@amp_short);
     my $n_long_dup = remove_duplicate_intervals(\@amp_long);
     print STDERR $seqname.":".iftag().
-                 " baby ".scalar(@amp)." ($n_dup dups),".
-                 " short ".scalar(@amp_short)." ($n_short_dup dups),".
-                 " long ".scalar(@amp_long)." ($n_long_dup dups)\n";
+                 " right ".scalar(@amp)." ($n_dup dups),".
+                 " tooshort ".scalar(@amp_short)." ($n_short_dup dups),".
+                 " toolong ".scalar(@amp_long)." ($n_long_dup dups)\n";
 
     foreach my $h (@amp) {
         if ($o_bed) {
             my $name = "$o_tag:".length($h->[2]);
-            print $out_bed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
+            #print $out_bed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
+            $out_bed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_seq) {
             # use base-1 GFF-type intervals in Fasta name
