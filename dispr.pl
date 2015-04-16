@@ -81,12 +81,15 @@ Amplicons:
 
     --multiplex           If more than one primer pair presented, consider 
                           amplicons produced by any possible primer pair 
-                          (DEFAULT)
+                          (DEFAULT, BUT >1 PRIMER PAIR NOT CURRENTLY SUPPORTED)
     --no-multiplex        If more than one primer pair presented, only consider
                           amplicons produced by each primer pair
     --min bp              Minimum accepted size of amplicon [default $o_min]
     --max bp              Maximum accepted size of amplicon [default $o_max]
     --maxmax bp           Maximum 'too-long' amplicon to track [default $o_maxmax]
+    --output-extremes     Include too-short and too-long amplicons in output,
+                          the names include resp. SHORT and LONG
+                          (NOT CURRENTLY SUPPORTED)
 
 Input and output files:
 
@@ -440,17 +443,17 @@ sub remove_duplicate_intervals($) {
 
 
 # Dump hits for primer sequences, if requested.  Join hits, sort,
-# produce BED and Fasta files.
+# produce BED and/or Fasta files.
 #
 sub dump_primer_hits($$$) {
     my ($seqname, $forward_hits, $revcomp_hits) = @_;
-
-    return if not $o_primerbed and not $o_primerseq;
 
     my @all_hits = sort { $a->[0] <=> $b->[0] } ( @$forward_hits, @$revcomp_hits );
     my $n_all_dups = remove_duplicate_intervals(\@all_hits);
     print STDERR "dump_primer_hits: $seqname:".iftag()." all hits ".
                  scalar(@all_hits)." ($n_all_dups dups)\n" if $o_verbose;
+
+    return if not $o_primerbed and not $o_primerseq;
 
     foreach my $h (@all_hits) {
         if ($o_primerbed) {
@@ -473,6 +476,10 @@ sub dump_primer_hits($$$) {
 
 
 
+# Dump hits for amplicon sequences, if requested.  Construct amplicons,
+# sort into too-short, too-long, and just-right lengths, count them up,
+# and produce BED and/or Fasta files.
+#
 sub dump_amplicon_hits($$$$) {
     my ($seqname, $sequence, $forward_hits, $revcomp_hits) = @_;
     # intervals extend between forward_hits->[0] and revcomp_hits->[1]
@@ -504,6 +511,8 @@ sub dump_amplicon_hits($$$$) {
                  " right ".scalar(@amp)." ($n_dup dups),".
                  " tooshort ".scalar(@amp_short)." ($n_short_dup dups),".
                  " toolong ".scalar(@amp_long)." ($n_long_dup dups)\n";
+
+    return if not $o_bed and not $o_seq;
 
     foreach my $h (@amp) {
         if ($o_bed) {

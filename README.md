@@ -8,6 +8,7 @@ Given a pair of degenerate primers, find sites in the given genome matching some
 * Fasta-format file of primer binding site sequences
 * BED-format file of primer binding sites
 
+A small number of mismatches can be allowed at the 5' end of the primer.
 
 License
 -------
