@@ -72,15 +72,15 @@ Primer and search parameters:
     --reverse
 
     --mismatch-simple INT1:INT2
-                          Allow up to INT1 mismatches in 5'-most INT2 bp of 
+                          Allow up to INT1 mismatches in 5'-most INT2 bp of
                           each primer.  INT1 must be <= 3 and INT2 must be
                           <= 7.  To allow up to 2 mismatches in the 5'-most
                           5 bp:  --mismatch-simple 2:5
 
 Amplicons:
 
-    --multiplex           If more than one primer pair presented, consider 
-                          amplicons produced by any possible primer pair 
+    --multiplex           If more than one primer pair presented, consider
+                          amplicons produced by any possible primer pair
                           (DEFAULT, BUT >1 PRIMER PAIR NOT CURRENTLY SUPPORTED)
     --no-multiplex        If more than one primer pair presented, only consider
                           amplicons produced by each primer pair
@@ -146,21 +146,26 @@ die "must provide sequence to search with --ref" if not $o_ref;
 if ($o_mismatch_simple) {
     ($o_mm_int1, $o_mm_int2) = split(/:/, $o_mismatch_simple, 2);
     die "unable to interpret --mismatch-simple argument" if not $o_mm_int1 or not $o_mm_int2;
-    die "must allow <= 3 mismatches" if $o_mm_int1 > 3;
-    die "must span <= 7 5' bases" if $o_mm_int2 > 7;
+    die "must allow 1 to 3 mismatches" if $o_mm_int1 < 1 or $o_mm_int1 > 3;
+    die "must span 1 to 7 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > 7;
 }
 
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
+sub count_head_tail($$);  # count number of sequences with mismatches
 sub match_positions($$);  # search for primer
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
 sub dump_amplicon_hits($$$$);  # calculate and dump amplicons
 
-
-my %forward = prepare_primer($o_pf[$o_pi - 1]);
-my %reverse = prepare_primer($o_pr[$o_pi - 1]);
+sub iftag  { return $o_tag ? "$o_tag:"  : ""; }
+sub iftags { return $o_tag ? "$o_tag: " : " "; }
+sub trunc($) {
+    my $s = shift;
+    my $lim = 50;
+    return length($s) > $lim ? substr($s, 0, $lim - 11)."<truncated>" : $s;
+}
 
 print STDERR "Assuming primer orientation '$o_orientation' as so, for example primers:
 
@@ -183,13 +188,15 @@ in-silico amplicon.
 
 ";
 
-sub iftag  { return $o_tag ? $o_tag    : ""; }
-sub iftags { return $o_tag ? "$o_tag " : " "; }
 
-print STDERR iftags()."forward   : $forward{forwardpattern}, $forward{count} expanded sequences\n";
-print STDERR iftags()."forward rc: $forward{revcomppattern}, same number in reverse complement\n";
-print STDERR iftags()."reverse   : $reverse{forwardpattern}, $reverse{count} expanded sequences\n";
-print STDERR iftags()."reverse rc: $reverse{revcomppattern}, same number in reverse complement\n";
+print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2 ...\n" if $o_mismatch_simple;
+my %forward = prepare_primer($o_pf[$o_pi - 1]);
+my %reverse = prepare_primer($o_pr[$o_pi - 1]);
+
+print STDERR iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} expanded sequences\n";
+print STDERR iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement\n";
+print STDERR iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} expanded sequences\n";
+print STDERR iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement\n";
 print STDERR "\n";
 
 print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $o_bed and not $o_seq and not $o_primerbed and not $o_primerseq;
@@ -197,14 +204,14 @@ print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $o_bed
 # open input, create output
 my ($in, $out_seq, $out_bed, $out_primerseq, $out_primerbed);
 
-$in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or 
+$in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or
     die "could not open input file '$o_ref': $!";
 if ($o_seq) {
     $out_seq = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or
         die "could not open output Fasta file '$o_seq': $!";
 }
 if ($o_bed) {
-    open($out_bed, ">$o_bed") or 
+    open($out_bed, ">$o_bed") or
         die "could not open output BED file '$o_bed': $!";
 }
 if ($o_primerseq) {
@@ -212,7 +219,7 @@ if ($o_primerseq) {
         die "could not open output Fasta file '$o_primerseq': $!";
 }
 if ($o_primerbed) {
-    open($out_primerbed, ">$o_primerbed") or 
+    open($out_primerbed, ">$o_primerbed") or
         die "could not open output BED file '$o_primerbed': $!";
 }
 
@@ -258,7 +265,7 @@ $out_primerseq->close() if $out_primerseq;
 $out_primerbed->close() if $out_primerbed;
 
 
-# ---- local subroutines ----------------------------------- 
+# ---- local subroutines -----------------------------------
 
 
 
@@ -297,6 +304,10 @@ sub expand_dot($) {
 #     IUPAC           Bio::Tools::IUPAC object for the given primer
 #     count           number of concrete sequences formable from primer
 #
+# If there are mismatches, then there is a forward0, revcomp0, IUPAC0,
+# count0 for the non-mismatch sequences.  forwardpattern, revcomppattern,
+# count are all with reference to the mismatch patterns.
+#
 sub prepare_primer($) {
     my ($primer) = @_;
     my %dest;
@@ -313,11 +324,17 @@ sub prepare_primer($) {
     my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
     $dest{SeqPattern} = $seqpattern;
     if ($o_mismatch_simple) {
-        $dest{forwardpattern} = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 0);
-        $dest{revcomppattern} = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 1);
+        my ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 0);
+        $dest{forwardpattern} = $mmpat;
+        $dest{count} = $mmcount;
+        ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 1);
+        $dest{revcomppattern} = $mmpat;
         $dest{mismatch} = $o_mismatch_simple;
         $dest{forward0} = expand_dot($seqpattern->expand());
         $dest{revcomp0} = expand_dot($seqpattern->revcom(1)->expand());
+        my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
+        $dest{IUPAC0} = $iupac;
+        $dest{count0} = $iupac->count();
         print STDERR "forwardpattern    $dest{forwardpattern}\n" if $o_verbose;
         print STDERR "revcomppattern    $dest{revcomppattern}\n" if $o_verbose;
         print STDERR "forward0          $dest{forward0}\n" if $o_verbose;
@@ -325,30 +342,55 @@ sub prepare_primer($) {
     } else {
         $dest{forwardpattern} = expand_dot($seqpattern->expand());
         $dest{revcomppattern} = expand_dot($seqpattern->revcom(1)->expand());
+        my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
+        $dest{IUPAC} = $iupac;
+        $dest{count} = $iupac->count();
     }
     $dest{forwardquoted} = qr/$dest{forwardpattern}/i;
     $dest{revcompquoted} = qr/$dest{revcomppattern}/i;
-    my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
-    $dest{IUPAC} = $iupac;
-    $dest{count} = $iupac->count();
     return %dest;
 }
 
 
 
+# Construct regex from a degenerate primer ($p) having a given number of
+# mismatches ($m) within a given 5' length of sequence ($len), accomodating
+# it possibly needing to be reverse-complemented ($is_rc)
+#
 sub apply_mismatch_simple($$$$) {
     my ($p, $m, $len, $is_rc) = @_;
-    print STDERR "p = $p, m = $m, len = $len, is_rc = $is_rc\n";
+    print STDERR "apply_mismatch_simple: p = $p, m = $m, len = $len, is_rc = $is_rc\n" if $o_verbose;
     my ($head, $tail);
-    #if ($is_rc) {
-    #    $head = substr($p, -$len);   $tail = substr($p, 0, length($p) - $len);
-    #} else {
-        $head = substr($p, 0, $len); $tail = substr($p, $len);
-    #}
-    die "no tail available" if not $tail;
+    $head = substr($p, 0, $len); $tail = substr($p, $len);
+    # die "no tail available" if not $tail;  # not necessary, probably
     print STDERR "head = $head, tail = $tail\n" if $o_verbose;
+    my @h;
     my @p;
-    if ($m == 3) {
+    if ($m == 1) {
+        for (my $i = 0; $i < $len; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            push @h, $s;
+            my $sp = Bio::Tools::SeqPattern->new(-seq => $s, -type => 'dna');
+            my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+            print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+            push @p, $pat;
+        }
+    } elsif ($m == 2) {
+        for (my $i = 0; $i < $len - 1; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            for (my $j = $i + 1; $j < $len; ++$j) {
+                my $ss = $s;
+                substr($ss, $j, 1) = "N";
+                push @h, $ss;
+                my $sp = Bio::Tools::SeqPattern->new(-seq => $ss, -type => 'dna');
+                my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                push @p, $pat;
+            }
+        }
+    } elsif ($m == 3) {
         for (my $i = 0; $i < $len - 2; ++$i) {
             my $s = $head;
             substr($s, $i, 1) = "N";
@@ -358,34 +400,13 @@ sub apply_mismatch_simple($$$$) {
                 for (my $k = $j + 1; $k < $len; ++$k) {
                     my $sss = $ss;
                     substr($sss, $k, 1) = "N";
+                    push @h, $sss;
                     my $sp = Bio::Tools::SeqPattern->new(-seq => $sss, -type => 'dna');
                     my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
                     print STDERR "i = $i, pat = $pat\n" if $o_verbose;
                     push @p, $pat;
                 }
             }
-        }
-    } elsif ($m == 2) {
-        for (my $i = 0; $i < $len - 1; ++$i) {
-            my $s = $head;
-            substr($s, $i, 1) = "N";
-            for (my $j = $i + 1; $j < $len; ++$j) {
-                my $ss = $s;
-                substr($ss, $j, 1) = "N";
-                my $sp = Bio::Tools::SeqPattern->new(-seq => $ss, -type => 'dna');
-                my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
-                print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-                push @p, $pat;
-            }
-        }
-    } elsif ($m == 1) {
-        for (my $i = 0; $i < $len; ++$i) {
-            my $s = $head;
-            substr($s, $i, 1) = "N";
-            my $sp = Bio::Tools::SeqPattern->new(-seq => $s, -type => 'dna');
-            my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
-            print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-            push @p, $pat;
         }
     } else {
         die "unrecognised number of mismatches $m";
@@ -401,10 +422,45 @@ sub apply_mismatch_simple($$$$) {
         $tailpat = expand_dot($tp->expand());
         $fullpat = $m_pat . $tailpat;
     }
-    print STDERR "m_pat = $m_pat, tailpat = $tailpat, fullpat = $fullpat\n" if $o_verbose;
-    return $fullpat;
+    print STDERR "apply_mismatch_simple: m_pat = $m_pat, tailpat = $tailpat, fullpat = $fullpat\n" if $o_verbose;
+    my $count = count_head_tail(\@h, $tail);
+    return ($fullpat, $count);
 }
 
+
+
+# Calculate the number of unique sequences represented by a mismatch-simple
+# sequence, with a list of alternate head mismatch sequences (@$head) and an
+# also-degenerate but otherwise invariant tail sequence ($tail).  Count the
+# unique sequences in the tail with Bio::Tools::IUPAC, and also use it to
+# to unroll each head sequence, counting the unique sequences across all
+# head sequences, and multiply their number by the tail number for the total.
+#
+sub count_head_tail($$) {
+    my ($head, $tail) = @_;
+    my $count;
+    if ($tail) {
+        my $iupac = Bio::Tools::IUPAC->new(-seq =>
+            Bio::Seq->new(-seq => $tail, -alphabet => 'dna'));
+        $count = $iupac->count();
+    } else {
+        $count = 1;  # we will be multiplying
+    }
+    my %h;
+    my $u;
+    foreach my $h (@$head) {
+        #my $s = Bio::Seq->new(-seq => $h, -alphabet => 'dna');
+        my $iupac = Bio::Tools::IUPAC->new(-seq =>
+            Bio::Seq->new(-seq => $h, -alphabet => 'dna'));
+        while (my $uniqueseq = $iupac->next_seq()) {
+            $h{$uniqueseq->seq()}++;
+            ++$u;
+        }
+    }
+    my $head_count = scalar keys %h;
+    print STDERR "count_head_tail: tail count = $count  head_count = $head_count  u = $u  total_count = ".$head_count*$count."\n" if $o_verbose;
+    return $head_count * $count;
+}
 
 
 # Passed in a pattern quoted with 'qr/.../i' and a reference to a sequence to
