@@ -84,14 +84,18 @@ $0  [ OPTIONS ] --ref fasta-file.fa
 
 Applies forward and reverse primer pairs to the reference file, identifying
 amplicons within given dimensions.  The primer sequences are sought paired in
-specified orientations within a range given by --min and --max.  The amplicon
-is measured from the outer extent of each primer sequence, so includes the
-primer sequence length.  Interior sequences (produced with --interior-bed and
---interior-seq) are amplicon sequences which exclude the primer sequences.
+specified orientations within a range given by --min and --max.  Sequence hits
+are made without regard to case in the reference sequence; a hit to 'ACTG' is
+equivalent to a hit to 'actg'.  'N' in the reference sequence will only hit a
+site that also allows 'N'.
 
 Duplicate primer sequence hits are removed, with the first hit in native
 orientation (forward and reverse primers) having priority over later hits in
 the same orientation as well as hits with either primer in reverse-complement.
+
+The amplicon is measured from the outer extent of each primer sequence, so
+includes the primer sequences.  Interior hits produced with --interior-bed and
+--interior-seq are amplicon sequences with the primer sequences excluded.
 
 Output to both BED and Fasta files includes the hit coordinates, the value
 supplied with --tag, and the orientation of the primer which produced the
@@ -110,7 +114,7 @@ Primer and search parameters:
          2: class 2 f $o_pf[1]  r $o_pr[1]
     --primers FILE        File containing primer pair(s), as forward/reverse
                           (CURRENTLY UNSUPPORTED)
-    --tag TAG             String added as tag to output
+    --tag TAG             String added as tag to output (REQUIRED)
     --orientation FR      Orientation of primers, only FR supported for now
     --both                Orientation of the reference sequence to search
     --forward             CURRENTLY ONLY --both IS SUPPORTED
