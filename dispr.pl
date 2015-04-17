@@ -82,11 +82,24 @@ Misc:
 my $usage = "
 $0  [ OPTIONS ] --ref fasta-file.fa
 
-Applies forward and reverse primer pairs to the reference file,
-identifying amplicons within given dimensions.  The primer sequences
-are sought paired in specified orientations within a range given
-by --min and --max.  The amplicon is measured from the outer extent
-of each primer sequence, so includes the primer sequence length.
+Applies forward and reverse primer pairs to the reference file, identifying
+amplicons within given dimensions.  The primer sequences are sought paired in
+specified orientations within a range given by --min and --max.  The amplicon
+is measured from the outer extent of each primer sequence, so includes the
+primer sequence length.  Interior sequences (produced with --interior-bed and
+--interior-seq) are amplicon sequences which exclude the primer sequences.
+
+Duplicate primer sequence hits are removed, with the first hit in native
+orientation (forward and reverse primers) having priority over later hits in
+the same orientation as well as hits with either primer in reverse-complement.
+
+Output to both BED and Fasta files includes the hit coordinates, the value
+supplied with --tag, and the orientation of the primer which produced the
+primer hit or the primer pair which produced the amplicon/interior hit.  In the
+output, F and R indicate forward and reverse primers in their given
+orientations, while f and r indicate these primers in their reverse-complement
+orientations.  'F,R' indicates a hit on the + strand while 'r,f' indicates a
+hit on the - strand.
 
 Primer and search parameters:
 
@@ -137,9 +150,9 @@ Input and output files:
     --primer-seq FASTA    Output, Fasta sequences containing identified
                           primer sequences
     --internal-bed BED    Output, BED file containing internal regions of
-                          amplicon positions, which excludes primers
+                          amplicon positions, which exclude primers
     --internal-seq FASTA  Output, Fasta sequences containing internal regions
-                          identified amplicon sequences, which excludes
+                          identified amplicon sequences, which exclude
                           primers
 
 Misc:
@@ -195,7 +208,7 @@ sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
-sub match_positions($$);  # search for primer
+sub match_positions($$$);  # search for primer hits
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
 sub dump_amplicon_internal_hits($$$$);  # calculate and dump amplicons and internal hits
@@ -286,13 +299,15 @@ while (my $inseq = $in->next_seq()) {
     } else {
         print STDERR "$this_seqname:".iftag()." searching ...\n";
     }
-    # any _forward_hits can be complemented by any _revcomp_hits
-    my @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence);
-    my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence);
-    my @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence);
-    my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence);
+    # Any _forward_hits can be complemented by any _revcomp_hits
+    my @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
+    my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
+    my @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
+    my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
 
-    # sort and remove duplicate hits that start at the same position
+    # Sort and remove duplicate hits that start at the same position.  So long
+    # as the sort is stable, the order enforces the duplicate selection
+    # hierarchy described in the help.
     my @forward_hits = sort { $a->[0] <=> $b->[0] } (@f_forward_hits, @r_forward_hits);
     my @revcomp_hits = sort { $a->[0] <=> $b->[0] } (@f_revcomp_hits, @r_revcomp_hits);
     my $n_forward_dups = remove_duplicate_intervals(\@forward_hits);
@@ -515,21 +530,22 @@ sub count_head_tail($$) {
 }
 
 
-# Passed in a pattern quoted with 'qr/.../i' and a reference to a sequence to
-# search.  Returns an array of anonymous arrays containing the 0-based
-# beginning and end of the hit and the sequence of the hit.  The interval is
-# [beg, end), the same as a BED interval, and each anonymous array contains
+# Passed in a pattern quoted with 'qr/.../i', a reference to a sequence to
+# search, and an ID to mark each hit.  Returns an array of anonymous arrays
+# containing the 0-based beginning and end of the hit and the sequence of the
+# hit.  The interval is [beg, end), the same as a BED interval, and each
+# anonymous array contains
 #
 # [ $beg, $end, $hit_sequence ]
 #
-sub match_positions($$) {
-    my ($pat, $seq) = @_;
+sub match_positions($$$) {
+    my ($pat, $seq, $id) = @_;
     my @ans;
     while ($$seq =~ /$pat/ig) {
         my ($beg, $end) = ($-[0], $+[0]);
         my $hit = substr($$seq, $beg, $end - $beg);
-        print STDERR "match_positions: $beg-$end   $hit\n" if $o_verbose;
-        push @ans, [ $beg, $end, $hit ];
+        print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_verbose;
+        push @ans, [ $beg, $end, $hit, $id ];
     }
     return @ans;
 }
@@ -564,8 +580,10 @@ sub dump_primer_hits($$$) {
     return if not $o_primerbed and not $o_primerseq;
 
     foreach my $h (@all_hits) {
+        my $hit = $h->[2];  # sequence
+        my $id = $h->[3];   # id of sequence (F, R, f, r)
         if ($o_primerbed) {
-            my $name = $h->[2];  # the hit sequence itself
+            my $name = "$id:$hit";  # the hit sequence itself
             $name = "$o_tag:$name" if $o_tag;
             #print $out_primerbed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
             $out_primerbed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
@@ -574,6 +592,7 @@ sub dump_primer_hits($$$) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
             $name .= ":$o_tag" if $o_tag;
+            $name .= ":$id";
             my $hitseq = Bio::Seq->new(-id => $name,
                                        -seq => $h->[2],
                                        -alphabed => 'dna');
@@ -592,7 +611,6 @@ sub dump_amplicon_internal_hits($$$$) {
     my ($seqname, $sequence, $forward_hits, $revcomp_hits) = @_;
     # amplicons extend between forward_hits->[0] and revcomp_hits->[1]
     # internal regions extend between forward_hits->[1] and revcomp_hits->[0]
-    # calculate amplicon intervals, produce bed intervals
     my @amp_short; # too short  0 <=      < $o_min
     my @amp_long; # too long   $o_max <  <= $o_maxmax
     my @amp; # just right $o_min <= <= $o_max
@@ -600,13 +618,14 @@ sub dump_amplicon_internal_hits($$$$) {
         foreach my $r (@$revcomp_hits) {
             next if $r->[0] < $f->[1];  # at least de-overlap the primers
             my ($beg, $end) = ( $f->[0], $r->[1] );
+            my $primers_id = $f->[3] . "," . $r->[3];
             my ($intbeg, $intend) = ( $f->[1], $r->[0] );
             my $amp_len = $end - $beg;
             next if $amp_len < 0 or $amp_len > $o_maxmax;
             my $amplicon = substr($$sequence, $beg, $end - $beg);
             my $internal = substr($$sequence, $intbeg, $intend - $intbeg);
             # this uses more storage than necessary but it may not matter
-            my $arr = [ $beg, $end, $amplicon, $intbeg, $intend, $internal ];
+            my $arr = [ $beg, $end, $amplicon, $primers_id, $intbeg, $intend, $internal ];
             if ($amp_len < $o_min) {
                 push @amp_short, $arr;
             } elsif ($amp_len > $o_max) {
@@ -628,27 +647,27 @@ sub dump_amplicon_internal_hits($$$$) {
 
     foreach my $h (@amp) {
         if ($o_bed) {
-            my $name = "$o_tag:".length($h->[2]);
+            my $name = "$o_tag:".$h->[3].":".length($h->[2]);
             #print $out_bed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
             $out_bed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_seq) {
             # use base-1 GFF-type intervals in Fasta name
-            my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$o_tag:".length($h->[2]);
+            my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$o_tag:".$h->[3].":".length($h->[2]);
             $out_seq->write_seq(Bio::Seq->new(-id => $name,
                                               -seq => $h->[2],
                                               -alphabet => 'dna'));
         }
         if ($o_internalbed) {
-            my $name = "$o_tag:".length($h->[5]);
-            #print $out_bed $seqname."\t".$h->[3]."\t".$h->[4]."\t".$name."\n";
-            $out_internalbed->print($seqname."\t".$h->[3]."\t".$h->[4]."\t".$name."\n");
+            my $name = "$o_tag:".$h->[3].":".length($h->[6]);
+            #print $out_bed $seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n";
+            $out_internalbed->print($seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n");
         }
         if ($o_internalseq) {
             # use base-1 GFF-type intervals in Fasta name
-            my $name = "$seqname:".($h->[3] + 1)."-".$h->[4].":$o_tag:".length($h->[5]);
+            my $name = "$seqname:".($h->[4] + 1)."-".$h->[5].":$o_tag:".$h->[3].":".length($h->[6]);
             $out_internalseq->write_seq(Bio::Seq->new(-id => $name,
-                                                      -seq => $h->[5],
+                                                      -seq => $h->[6],
                                                       -alphabet => 'dna'));
         }
     }
