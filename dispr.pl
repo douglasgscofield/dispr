@@ -27,8 +27,6 @@ my $o_pi = 1;  # 1 - 1 = 0
 #TTYCTBARRSTRTARATNADRGGRTT
 my $o_primers;
 my $o_tag;
-my $o_primerbed;
-my $o_primerseq;
 my $o_multiplex = 0;
 my $o_orientation = "FR";
 my $o_min = 1;
@@ -38,6 +36,10 @@ my $o_dir = "both";
 my $o_ref;
 my $o_bed;
 my $o_seq;
+my $o_primerbed;
+my $o_primerseq;
+my $o_internalbed;
+my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_verbose;
 my $o_help;
@@ -46,6 +48,36 @@ my $o_mismatch_simple;
 my $o_mm_int1;
 my $o_mm_int2;
 
+
+my $short_usage = "
+NOTE: '$0 --help' will provide more details.
+
+USAGE:   $0  [ OPTIONS ] --ref fasta-file.fa
+
+Applies forward and reverse primer pairs to the reference file,
+identifying amplicons within given dimensions.
+
+Primer and search parameters:
+    --pf FORWARD_PRIMER      --pr REVERSE_PRIMER    [ --pi INT ]
+    --primers FILE           --orientation FR
+    --both                   --forward              --reverse
+    --tag TAG
+    --mismatch-simple INT1:INT2
+
+Amplicons:
+    --multiplex              --no-multiplex
+    --min bp                 --max bp               --maxmax bp
+    --output-extremes
+
+Input and output files:
+    --ref INPUT_FASTA
+    --bed OUTPUT_BED         --seq OUTPUT_FASTA
+    --primer-bed BED         --primer-seq FASTA
+    --internal-bed BED       --internal-seq FASTA
+
+Misc:
+    --expand-dot             --verbose              --help
+";
 
 my $usage = "
 $0  [ OPTIONS ] --ref fasta-file.fa
@@ -104,38 +136,47 @@ Input and output files:
                           sequences found
     --primer-seq FASTA    Output, Fasta sequences containing identified
                           primer sequences
+    --internal-bed BED    Output, BED file containing internal regions of
+                          amplicon positions, which excludes primers
+    --internal-seq FASTA  Output, Fasta sequences containing internal regions
+                          identified amplicon sequences, which excludes
+                          primers
 
 Misc:
 
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --verbose             Describe actions
-    --help                Produce this help
+    --help/-h/-?          Produce this longer help
 
 ";
 
-GetOptions("pf=s"          => \@o_pf,
-           "pr=s"          => \@o_pr,
-           "pi=i"          => \$o_pi,
-           "primers=s"     => \$o_primers,
-           "tag=s"         => \$o_tag,
-           "orientation=s" => \$o_orientation,
-           "both"          => sub { $o_dir = "both" },
-           "forward"       => sub { $o_dir = "forward" },
-           "reverse"       => sub { $o_dir = "reverse" },
+die $short_usage if not @ARGV;
+
+GetOptions("pf=s"              => \@o_pf,
+           "pr=s"              => \@o_pr,
+           "pi=i"              => \$o_pi,
+           "primers=s"         => \$o_primers,
+           "tag=s"             => \$o_tag,
+           "orientation=s"     => \$o_orientation,
+           "both"              => sub { $o_dir = "both" },
+           "forward"           => sub { $o_dir = "forward" },
+           "reverse"           => sub { $o_dir = "reverse" },
            "mismatch-simple=s" => \$o_mismatch_simple,
-           "primer-bed=s"  => \$o_primerbed,
-           "primer-seq=s"  => \$o_primerseq,
-           "multiplex"     => \$o_multiplex,
-           "no-multiplex"  => sub { $o_multiplex = 0 },
-           "min=i"         => \$o_min,
-           "max=i"         => \$o_max,
-           "maxmax=i"      => \$o_maxmax,
-           "ref=s"         => \$o_ref,
-           "bed=s"         => \$o_bed,
-           "seq=s"         => \$o_seq,
-           "verbose"       => \$o_verbose,
-           "expand-dot"    => \$o_expand_dot,
-           "help|?"        => \$o_help) or die $usage;
+           "primer-bed=s"      => \$o_primerbed,
+           "primer-seq=s"      => \$o_primerseq,
+           "internal-bed=s"    => \$o_internalbed,
+           "internal-seq=s"    => \$o_internalseq,
+           "multiplex"         => \$o_multiplex,
+           "no-multiplex"      => sub { $o_multiplex = 0 },
+           "min=i"             => \$o_min,
+           "max=i"             => \$o_max,
+           "maxmax=i"          => \$o_maxmax,
+           "ref=s"             => \$o_ref,
+           "bed=s"             => \$o_bed,
+           "seq=s"             => \$o_seq,
+           "verbose"           => \$o_verbose,
+           "expand-dot"        => \$o_expand_dot,
+           "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
 die "only FR orientation currently supported" if $o_orientation ne "FR";
@@ -157,7 +198,7 @@ sub count_head_tail($$);  # count number of sequences with mismatches
 sub match_positions($$);  # search for primer
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
-sub dump_amplicon_hits($$$$);  # calculate and dump amplicons
+sub dump_amplicon_internal_hits($$$$);  # calculate and dump amplicons and internal hits
 
 sub iftag  { return $o_tag ? "$o_tag:"  : ""; }
 sub iftags { return $o_tag ? "$o_tag: " : " "; }
@@ -199,28 +240,39 @@ print STDERR iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse
 print STDERR iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement\n";
 print STDERR "\n";
 
-print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $o_bed and not $o_seq and not $o_primerbed and not $o_primerseq;
+my $do_amplicon = ($o_bed or $o_seq);
+my $do_primer = ($o_primerbed or $o_primerseq);
+my $do_internal = ($o_internalbed or $o_internalseq);
+
+print STDERR "WARNING: no Fasta or BED output will be produced.\n" if not $do_amplicon and not $do_primer and not $do_internal;
 
 # open input, create output
-my ($in, $out_seq, $out_bed, $out_primerseq, $out_primerbed);
+my ($in,
+    $out_seq, $out_bed,
+    $out_primerseq, $out_primerbed,
+    $out_internalseq, $out_internalbed);
 
-$in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or
-    die "could not open input file '$o_ref': $!";
+sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
+
+$in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or diefile($o_ref);
 if ($o_seq) {
-    $out_seq = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or
-        die "could not open output Fasta file '$o_seq': $!";
+    $out_seq = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or diefile($o_ref);
 }
 if ($o_bed) {
-    open($out_bed, ">$o_bed") or
-        die "could not open output BED file '$o_bed': $!";
+    open($out_bed, ">$o_bed") or diefile($o_ref);
 }
 if ($o_primerseq) {
-    $out_primerseq = Bio::SeqIO->new(-file => ">$o_primerseq", -format => 'fasta') or
-        die "could not open output Fasta file '$o_primerseq': $!";
+    $out_primerseq = Bio::SeqIO->new(-file => ">$o_primerseq", -format => 'fasta') or diefile($o_ref);
 }
 if ($o_primerbed) {
-    open($out_primerbed, ">$o_primerbed") or
-        die "could not open output BED file '$o_primerbed': $!";
+    open($out_primerbed, ">$o_primerbed") or diefile($o_ref);
+}
+
+if ($o_internalseq) {
+    $out_internalseq = Bio::SeqIO->new(-file => ">$o_internalseq", -format => 'fasta') or diefile($o_ref);
+}
+if ($o_internalbed) {
+    open($out_internalbed, ">$o_internalbed") or diefile($o_ref);
 }
 
 my $Un;
@@ -254,7 +306,7 @@ while (my $inseq = $in->next_seq()) {
 
     dump_primer_hits($this_seqname, \@forward_hits, \@revcomp_hits);
 
-    dump_amplicon_hits($this_seqname, \$this_sequence, \@forward_hits, \@revcomp_hits);
+    dump_amplicon_internal_hits($this_seqname, \$this_sequence, \@forward_hits, \@revcomp_hits);
 
 }
 
@@ -532,13 +584,14 @@ sub dump_primer_hits($$$) {
 
 
 
-# Dump hits for amplicon sequences, if requested.  Construct amplicons,
-# sort into too-short, too-long, and just-right lengths, count them up,
-# and produce BED and/or Fasta files.
+# Dump hits for amplicon and internal sequences, if requested.  Construct
+# amplicons, sort into too-short, too-long, and just-right lengths, count them
+# up, and produce BED and/or Fasta files for amplicons and/or internal regions.
 #
-sub dump_amplicon_hits($$$$) {
+sub dump_amplicon_internal_hits($$$$) {
     my ($seqname, $sequence, $forward_hits, $revcomp_hits) = @_;
-    # intervals extend between forward_hits->[0] and revcomp_hits->[1]
+    # amplicons extend between forward_hits->[0] and revcomp_hits->[1]
+    # internal regions extend between forward_hits->[1] and revcomp_hits->[0]
     # calculate amplicon intervals, produce bed intervals
     my @amp_short; # too short  0 <=      < $o_min
     my @amp_long; # too long   $o_max <  <= $o_maxmax
@@ -547,10 +600,13 @@ sub dump_amplicon_hits($$$$) {
         foreach my $r (@$revcomp_hits) {
             next if $r->[0] < $f->[1];  # at least de-overlap the primers
             my ($beg, $end) = ( $f->[0], $r->[1] );
+            my ($intbeg, $intend) = ( $f->[1], $r->[0] );
             my $amp_len = $end - $beg;
             next if $amp_len < 0 or $amp_len > $o_maxmax;
             my $amplicon = substr($$sequence, $beg, $end - $beg);
-            my $arr = [ $beg, $end, $amplicon ];
+            my $internal = substr($$sequence, $intbeg, $intend - $intbeg);
+            # this uses more storage than necessary but it may not matter
+            my $arr = [ $beg, $end, $amplicon, $intbeg, $intend, $internal ];
             if ($amp_len < $o_min) {
                 push @amp_short, $arr;
             } elsif ($amp_len > $o_max) {
@@ -579,10 +635,21 @@ sub dump_amplicon_hits($$$$) {
         if ($o_seq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$o_tag:".length($h->[2]);
-            my $hitseq = Bio::Seq->new(-id => $name,
-                                       -seq => $h->[2],
-                                       -alphabed => 'dna');
-            $out_seq->write_seq($hitseq);
+            $out_seq->write_seq(Bio::Seq->new(-id => $name,
+                                              -seq => $h->[2],
+                                              -alphabet => 'dna'));
+        }
+        if ($o_internalbed) {
+            my $name = "$o_tag:".length($h->[5]);
+            #print $out_bed $seqname."\t".$h->[3]."\t".$h->[4]."\t".$name."\n";
+            $out_internalbed->print($seqname."\t".$h->[3]."\t".$h->[4]."\t".$name."\n");
+        }
+        if ($o_internalseq) {
+            # use base-1 GFF-type intervals in Fasta name
+            my $name = "$seqname:".($h->[3] + 1)."-".$h->[4].":$o_tag:".length($h->[5]);
+            $out_internalseq->write_seq(Bio::Seq->new(-id => $name,
+                                                      -seq => $h->[5],
+                                                      -alphabet => 'dna'));
         }
     }
 }
