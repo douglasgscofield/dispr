@@ -50,6 +50,7 @@ my $o_primerseq;
 my $o_internalbed;
 my $o_internalseq;
 my $o_expand_dot = 0;
+my $o_no_trunc = 0;
 my $o_verbose;
 my $o_help;
 my $o_threads = 0;# 4;
@@ -81,7 +82,6 @@ Primer and search parameters:
 Amplicons:
     --multiplex              --no-multiplex
     --min bp                 --max bp               --maxmax bp
-    --output-extremes
 
 Input and output files:
     --ref INPUT_FASTA
@@ -91,7 +91,7 @@ Input and output files:
 
 Misc:
     --expand-dot             --verbose              --help
-    --threads
+    --no-trunc               --threads
 ";
 
 my $usage = "
@@ -156,9 +156,6 @@ Amplicons:
     --min bp              Minimum accepted size of amplicon [default $o_min]
     --max bp              Maximum accepted size of amplicon [default $o_max]
     --maxmax bp           Maximum 'too-long' amplicon to track [default $o_maxmax]
-    --output-extremes     Include too-short and too-long amplicons in output,
-                          the names include resp. SHORT and LONG
-                          (NOT CURRENTLY SUPPORTED)
 
 Input and output files:
 
@@ -184,6 +181,7 @@ Misc:
     --threads INT         Use up to INT threads (default $o_threads, max $o_threads_max)
                           (NOT IMPLEMENTED)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
+    --no-trunc            Do not truncate regexs when displaying
     --verbose             Describe actions
     --help/-h/-?          Produce this longer help
 
@@ -216,6 +214,7 @@ GetOptions("pf=s"              => \@o_pf,
            "seq=s"             => \$o_seq,
            "verbose"           => \$o_verbose,
            "expand-dot"        => \$o_expand_dot,
+           "no-trunc"          => \$o_no_trunc,
            "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
@@ -247,6 +246,7 @@ sub iftag  { return $o_tag ? "$o_tag:"  : ""; }
 sub iftags { return $o_tag ? "$o_tag: " : " "; }
 sub trunc($) {
     my $s = shift;
+    return $s if $o_no_trunc;
     my $lim = 50;
     return length($s) > $lim ? substr($s, 0, $lim - 11)."<truncated>" : $s;
 }
@@ -267,6 +267,12 @@ that together with their reverse-complements, these primers can delimit
 amplicons three additional ways: Reverse-drawroF, Forward-draworF and
 Reverse-esreveR.  All of these possibilities are considered here.
 
+Minimum amplicon length: $o_min bp
+Maximum amplicon length: $o_max bp
+
+The maximum distance tracked between suitable primer pairs is $o_maxmax bp.
+Potential amplicons longer than $o_maxmax bp are not tracked.
+
 In future I may add an indication of which primer pair delimited which
 in-silico amplicon.
 
@@ -280,9 +286,9 @@ print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $g
 my %forward = prepare_primer($o_pf[$o_pi - 1]);
 my %reverse = prepare_primer($o_pr[$o_pi - 1]);
 
-print STDERR iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} expanded sequences\n";
+print STDERR iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences\n";
 print STDERR iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement\n";
-print STDERR iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} expanded sequences\n";
+print STDERR iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences\n";
 print STDERR iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement\n";
 print STDERR "\n";
 
@@ -427,8 +433,8 @@ sub prepare_primer($) {
         my ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 0);
         $dest{forwardpattern} = $mmpat;
         $dest{count} = $mmcount;
-        ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 1);
-        $dest{revcomppattern} = $mmpat;
+        #($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 1);
+        $dest{revcomppattern} = Bio::Tools::SeqPattern->new(-seq => $mmpat, -type => 'dna')->revcom()->expand();
         $dest{mismatch} = $o_mismatch_simple;
         $dest{forward0} = expand_dot($seqpattern->expand());
         $dest{revcomp0} = expand_dot($seqpattern->revcom(1)->expand());
@@ -606,20 +612,25 @@ sub count_head_tail($$) {
         $count = 1;  # we will be multiplying
     }
     my %h;
-    my $u;
+    my $u = 0;
+    my $n = 0;
+    print STDERR "With mismatches, ".scalar(@$head)." head sequences to examine, and one tail: $tail\n";
     foreach my $h (@$head) {
         #my $s = Bio::Seq->new(-seq => $h, -alphabet => 'dna');
+        ++$n;
         my $iupac = Bio::Tools::IUPAC->new(-seq =>
             Bio::Seq->new(-seq => $h, -alphabet => 'dna'));
         while (my $uniqueseq = $iupac->next_seq()) {
             $h{$uniqueseq->seq()}++;
             ++$u;
         }
+        print STDERR "After $n-th head: $u unrolled, ".scalar(keys(%h))." unique mismatch sequences\n" if ! ($n % 20);
     }
     my $head_count = scalar keys %h;
     print STDERR "count_head_tail: tail count = $count  head_count = $head_count  u = $u  total_count = ".$head_count*$count."\n" if $o_verbose;
     return $head_count * $count;
 }
+
 
 
 # Passed in a pattern quoted with 'qr/.../aai', a reference to a sequence to
@@ -731,7 +742,7 @@ sub dump_amplicon_internal_hits($$$$) {
     my $n_short_dup = remove_duplicate_intervals(\@amp_short);
     my $n_long_dup = remove_duplicate_intervals(\@amp_long);
     print STDERR $seqname.":".iftag().
-                 " right ".scalar(@amp)." ($n_dup dups),".
+                 " amplicons ".scalar(@amp)." ($n_dup dups),".
                  " tooshort ".scalar(@amp_short)." ($n_short_dup dups),".
                  " toolong ".scalar(@amp_long)." ($n_long_dup dups)\n";
 
