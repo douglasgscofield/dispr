@@ -3,12 +3,19 @@
 use strict;
 use warnings;
 
+my $got_RE2;
+BEGIN {
+    # load re::engine::RE2 if available
+    if ( eval "use re::engine::RE2" ) {
+        $got_RE2 = 1;
+    }
+}
+
 use Getopt::Long;
 use Bio::Seq;
 use Bio::SeqIO;
 use Bio::Tools::IUPAC;
 use Bio::Tools::SeqPattern;
-use Parallel::ForkManager;
 
 #"class1:F:CTNCAYVARCCYATGTAYYWYTTBYT"
 #"class1:R:GTYYTNACHCYRTAVAYRATRGGRTT"
@@ -44,7 +51,7 @@ my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_verbose;
 my $o_help;
-my $o_threads = 4;
+my $o_threads = 0;# 4;
 my $o_threads_max = 4;
 
 my $o_mismatch_simple;
@@ -174,6 +181,7 @@ Input and output files:
 Misc:
 
     --threads INT         Use up to INT threads (default $o_threads, max $o_threads_max)
+                          (NOT IMPLEMENTED)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --verbose             Describe actions
     --help/-h/-?          Produce this longer help
@@ -214,7 +222,8 @@ die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
 die "must provide results name --tag" if not $o_tag;
 die "must provide sequence to search with --ref" if not $o_ref;
-die "must use 1 to $o_threads_max threads" if $o_threads < 0 or $o_threads > $o_threads_max;
+die "must not specify --threads, UNIMPLEMENTED" if $o_threads;
+#die "must use 1 to $o_threads_max threads" if $o_threads < 0 or $o_threads > $o_threads_max;
 
 if ($o_mismatch_simple) {
     ($o_mm_int1, $o_mm_int2) = split(/:/, $o_mismatch_simple, 2);
@@ -262,8 +271,8 @@ in-silico amplicon.
 
 ";
 
-
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2 ...\n" if $o_mismatch_simple;
+
 my %forward = prepare_primer($o_pf[$o_pi - 1]);
 my %reverse = prepare_primer($o_pr[$o_pi - 1]);
 
@@ -385,9 +394,9 @@ sub expand_dot($) {
 #     Seq             Bio::Seq object for the primer
 #     SeqPattern      Bio::Tools::SeqPattern object for the primer
 #     forwardpattern  regex for the forward (given) orientation of the primer
-#     forwardquoted   a quoted 'qr/.../i' version of forwardpattern
+#     forwardquoted   a quoted 'qr/.../aai' version of forwardpattern
 #     revcomppattern  regex for the reverse complement of the given primer
-#     revcompquoted   a quoted 'qr/.../i' version of revcomppattern
+#     revcompquoted   a quoted 'qr/.../aai' version of revcomppattern
 #     IUPAC           Bio::Tools::IUPAC object for the given primer
 #     count           number of concrete sequences formable from primer
 #
@@ -433,8 +442,18 @@ sub prepare_primer($) {
         $dest{IUPAC} = $iupac;
         $dest{count} = $iupac->count();
     }
-    $dest{forwardquoted} = qr/$dest{forwardpattern}/i;
-    $dest{revcompquoted} = qr/$dest{revcomppattern}/i;
+    $dest{forwardquoted} = qr/$dest{forwardpattern}/aai;
+    if ($dest{forwardquoted}->isa("re::engine::RE2")) {
+        print STDERR "forwardquoted processed by RE2\n";
+    } else {
+        print STDERR "forwardquoted processed by Perl's RE engine\n";
+    }
+    $dest{revcompquoted} = qr/$dest{revcomppattern}/aai;
+    if ($dest{revcompquoted}->isa("re::engine::RE2")) {
+        print STDERR "revcompquoted processed by RE2\n";
+    } else {
+        print STDERR "revcompquoted processed by Perl's RE engine\n";
+    }
     return %dest;
 }
 
@@ -599,7 +618,7 @@ sub count_head_tail($$) {
 }
 
 
-# Passed in a pattern quoted with 'qr/.../i', a reference to a sequence to
+# Passed in a pattern quoted with 'qr/.../aai', a reference to a sequence to
 # search, and an ID to mark each hit.  Returns an array of anonymous arrays
 # containing the 0-based beginning and end of the hit and the sequence of the
 # hit.  The interval is [beg, end), the same as a BED interval, and each
@@ -610,7 +629,7 @@ sub count_head_tail($$) {
 sub match_positions($$$) {
     my ($pat, $seq, $id) = @_;
     my @ans;
-    while ($$seq =~ /$pat/ig) {
+    while ($$seq =~ /$pat/aaig) {
         my ($beg, $end) = ($-[0], $+[0]);
         my $hit = substr($$seq, $beg, $end - $beg);
         print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_verbose;
