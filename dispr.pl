@@ -549,7 +549,7 @@ sub apply_mismatch_simple($$$$) {
                     for (my $l = $k + 1; $l < $len - 1; ++$l) {
                         my $ssss = $sss;
                         substr($ssss, $l, 1) = "N";
-                        for (my $m = $l + 1; $m < $len; ++$l) {
+                        for (my $m = $l + 1; $m < $len; ++$m) {
                             my $sssss = $ssss;
                             substr($sssss, $m, 1) = "N";
                             push @h, $sssss;
