@@ -8,7 +8,8 @@ use warnings;
 # would love to make this conditional, but can't get it to work
 # allocate 536870912 bytes for the DFA tables 1 << 29
 # allocate 1073741824 bytes for the DFA tables 1 << 30
-use re::engine::RE2 -max_mem => 1 << 30;
+# 134217728 1<< 27
+use re::engine::RE2 -max_mem => 1 << 29;
 my $got_RE2 = 1;
 
 use Getopt::Long;
