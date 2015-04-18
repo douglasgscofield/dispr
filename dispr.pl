@@ -5,13 +5,7 @@ use 5.18.0;
 use strict;
 use warnings;
 
-my $got_RE2;
-BEGIN {
-    # load re::engine::RE2 if available
-    if ( eval "use re::engine::RE2" ) {
-        $got_RE2 = 1;
-    }
-}
+use re::engine::RE2;  # would love to make this conditional, but can't get it to work
 
 use Getopt::Long;
 use Bio::Seq;
