@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-require 5.18.0;
+use 5.18.0;
 
 use strict;
 use warnings;
@@ -275,8 +275,8 @@ in-silico amplicon.
 
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2 ...\n" if $o_mismatch_simple;
 
-print STDERR iftags()."Apparently we found 're::engine::RE2'\n" if $got_RE2;
-print STDERR iftags()."Apparently we did not fine 're::engine::RE2'\n" if not $got_RE2;
+print STDERR iftags()."We found 're::engine::RE2'\n" if $got_RE2;
+print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $got_RE2;
 
 my %forward = prepare_primer($o_pf[$o_pi - 1]);
 my %reverse = prepare_primer($o_pr[$o_pi - 1]);
