@@ -5,7 +5,9 @@ use 5.18.0;
 use strict;
 use warnings;
 
-use re::engine::RE2;  # would love to make this conditional, but can't get it to work
+# would love to make this conditional, but can't get it to work
+# allocate 536870912 bytes for the DFA tables
+use re::engine::RE2 -max_mem => 1 << 29;
 my $got_RE2 = 1;
 
 use Getopt::Long;
