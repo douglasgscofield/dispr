@@ -6,6 +6,7 @@ use strict;
 use warnings;
 
 use re::engine::RE2;  # would love to make this conditional, but can't get it to work
+my $got_RE2 = 1;
 
 use Getopt::Long;
 use Bio::Seq;
