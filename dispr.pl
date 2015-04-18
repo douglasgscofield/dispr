@@ -1,5 +1,7 @@
 #!/usr/bin/env perl
 
+require 5.18.0;
+
 use strict;
 use warnings;
 
