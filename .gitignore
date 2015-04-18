@@ -8,3 +8,5 @@ c?_*.fa
 c?_*.bed
 *.log
 *.zip
+test*.bed
+test*.seq

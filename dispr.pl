@@ -8,6 +8,7 @@ use Bio::Seq;
 use Bio::SeqIO;
 use Bio::Tools::IUPAC;
 use Bio::Tools::SeqPattern;
+use Parallel::ForkManager;
 
 #"class1:F:CTNCAYVARCCYATGTAYYWYTTBYT"
 #"class1:R:GTYYTNACHCYRTAVAYRATRGGRTT"
@@ -43,10 +44,15 @@ my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_verbose;
 my $o_help;
+my $o_threads = 4;
+my $o_threads_max = 4;
 
 my $o_mismatch_simple;
-my $o_mm_int1;
-my $o_mm_int2;
+my $o_mm_int1;  # number of mismatches
+my $o_mm_int1_max = 5;
+my $o_mm_int2;  # length of 5' sequence to apply mismatches
+my $o_mm_int2_max = 10;
+my $o_skip_count = 0;
 
 
 my $short_usage = "
@@ -62,7 +68,7 @@ Primer and search parameters:
     --primers FILE           --orientation FR
     --both                   --forward              --reverse
     --tag TAG
-    --mismatch-simple INT1:INT2
+    --mismatch-simple INT1:INT2                     --skip-count
 
 Amplicons:
     --multiplex              --no-multiplex
@@ -77,6 +83,7 @@ Input and output files:
 
 Misc:
     --expand-dot             --verbose              --help
+    --threads
 ";
 
 my $usage = "
@@ -122,9 +129,14 @@ Primer and search parameters:
 
     --mismatch-simple INT1:INT2
                           Allow up to INT1 mismatches in 5'-most INT2 bp of
-                          each primer.  INT1 must be <= 3 and INT2 must be
-                          <= 7.  To allow up to 2 mismatches in the 5'-most
+                          each primer.  INT1 must be <= $o_mm_int1_max and INT2 must be
+                          <= $o_mm_int2_max.  To allow up to 2 mismatches in the 5'-most
                           5 bp:  --mismatch-simple 2:5
+    --skip-count          Skip the counting-concrete-primers step of 
+                          --mismatch-simple, which can consume a surprising
+                          amount of time and memory ing if INT1 and/or INT2
+                          are large.  If this option is used, the count is
+                          reported as -1.
 
 Amplicons:
 
@@ -161,6 +173,7 @@ Input and output files:
 
 Misc:
 
+    --threads INT         Use up to INT threads (default $o_threads, max $o_threads_max)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --verbose             Describe actions
     --help/-h/-?          Produce this longer help
@@ -179,6 +192,7 @@ GetOptions("pf=s"              => \@o_pf,
            "forward"           => sub { $o_dir = "forward" },
            "reverse"           => sub { $o_dir = "reverse" },
            "mismatch-simple=s" => \$o_mismatch_simple,
+           "skip-count"        => \$o_skip_count,
            "primer-bed=s"      => \$o_primerbed,
            "primer-seq=s"      => \$o_primerseq,
            "internal-bed=s"    => \$o_internalbed,
@@ -200,12 +214,14 @@ die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
 die "must provide results name --tag" if not $o_tag;
 die "must provide sequence to search with --ref" if not $o_ref;
+die "must use 1 to $o_threads_max threads" if $o_threads < 0 or $o_threads > $o_threads_max;
 
 if ($o_mismatch_simple) {
     ($o_mm_int1, $o_mm_int2) = split(/:/, $o_mismatch_simple, 2);
     die "unable to interpret --mismatch-simple argument" if not $o_mm_int1 or not $o_mm_int2;
-    die "must allow 1 to 3 mismatches" if $o_mm_int1 < 1 or $o_mm_int1 > 3;
-    die "must span 1 to 7 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > 7;
+    die "must allow 1 to $o_mm_int1_max mismatches" if $o_mm_int1 < 1 or $o_mm_int1 > $o_mm_int1_max;
+    die "must span 1 to $o_mm_int2_max 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > $o_mm_int2_max;
+    print STDERR "counting concrete primers may take a long time, consider --skip-count\n" if $o_mm_int1 >= 4 and $o_mm_int2 >= 7;
 }
 
 sub expand_dot($);  # expand '.' in DNA regex
@@ -429,15 +445,15 @@ sub prepare_primer($) {
 # it possibly needing to be reverse-complemented ($is_rc)
 #
 sub apply_mismatch_simple($$$$) {
-    my ($p, $m, $len, $is_rc) = @_;
-    print STDERR "apply_mismatch_simple: p = $p, m = $m, len = $len, is_rc = $is_rc\n" if $o_verbose;
+    my ($p, $mism, $len, $is_rc) = @_;
+    print STDERR "apply_mismatch_simple: p = $p, mism = $mism, len = $len, is_rc = $is_rc\n" if $o_verbose;
     my ($head, $tail);
     $head = substr($p, 0, $len); $tail = substr($p, $len);
     # die "no tail available" if not $tail;  # not necessary, probably
     print STDERR "head = $head, tail = $tail\n" if $o_verbose;
     my @h;
     my @p;
-    if ($m == 1) {
+    if ($mism == 1) {
         for (my $i = 0; $i < $len; ++$i) {
             my $s = $head;
             substr($s, $i, 1) = "N";
@@ -447,7 +463,7 @@ sub apply_mismatch_simple($$$$) {
             print STDERR "i = $i, pat = $pat\n" if $o_verbose;
             push @p, $pat;
         }
-    } elsif ($m == 2) {
+    } elsif ($mism == 2) {
         for (my $i = 0; $i < $len - 1; ++$i) {
             my $s = $head;
             substr($s, $i, 1) = "N";
@@ -461,7 +477,7 @@ sub apply_mismatch_simple($$$$) {
                 push @p, $pat;
             }
         }
-    } elsif ($m == 3) {
+    } elsif ($mism == 3) {
         for (my $i = 0; $i < $len - 2; ++$i) {
             my $s = $head;
             substr($s, $i, 1) = "N";
@@ -479,22 +495,71 @@ sub apply_mismatch_simple($$$$) {
                 }
             }
         }
+    } elsif ($mism == 4) {
+        for (my $i = 0; $i < $len - 3; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            for (my $j = $i + 1; $j < $len - 2; ++$j) {
+                my $ss = $s;
+                substr($ss, $j, 1) = "N";
+                for (my $k = $j + 1; $k < $len - 1; ++$k) {
+                    my $sss = $ss;
+                    substr($sss, $k, 1) = "N";
+                    for (my $l = $k + 1; $l < $len; ++$l) {
+                        my $ssss = $sss;
+                        substr($ssss, $l, 1) = "N";
+                        push @h, $ssss;
+                        my $sp = Bio::Tools::SeqPattern->new(-seq => $ssss, -type => 'dna');
+                        my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                        print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                        push @p, $pat;
+                    }
+                }
+            }
+        }
+    } elsif ($mism == 5) {
+        for (my $i = 0; $i < $len - 4; ++$i) {
+            my $s = $head;
+            substr($s, $i, 1) = "N";
+            for (my $j = $i + 1; $j < $len - 3; ++$j) {
+                my $ss = $s;
+                substr($ss, $j, 1) = "N";
+                for (my $k = $j + 1; $k < $len - 2; ++$k) {
+                    my $sss = $ss;
+                    substr($sss, $k, 1) = "N";
+                    for (my $l = $k + 1; $l < $len - 1; ++$l) {
+                        my $ssss = $sss;
+                        substr($ssss, $l, 1) = "N";
+                        for (my $m = $l + 1; $m < $len; ++$l) {
+                            my $sssss = $ssss;
+                            substr($sssss, $m, 1) = "N";
+                            push @h, $sssss;
+                            my $sp = Bio::Tools::SeqPattern->new(-seq => $sssss, -type => 'dna');
+                            my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                            print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                            push @p, $pat;
+                        }
+                    }
+                }
+            }
+        }
     } else {
-        die "unrecognised number of mismatches $m";
+        die "unrecognised number of mismatches $mism";
     }
     @p = reverse @p if $is_rc;
-    my $m_pat = '(' . join('|', @p) . ')';
+    my $mism_pat = '(' . join('|', @p) . ')';
     my $tp = Bio::Tools::SeqPattern->new(-seq => $tail, -type => 'dna');
     my ($tailpat, $fullpat);
     if ($is_rc) {
         $tailpat = expand_dot($tp->revcom(1)->expand());
-        $fullpat = $tailpat . $m_pat;
+        $fullpat = $tailpat . $mism_pat;
     } else {
         $tailpat = expand_dot($tp->expand());
-        $fullpat = $m_pat . $tailpat;
+        $fullpat = $mism_pat . $tailpat;
     }
-    print STDERR "apply_mismatch_simple: m_pat = $m_pat, tailpat = $tailpat, fullpat = $fullpat\n" if $o_verbose;
-    my $count = count_head_tail(\@h, $tail);
+    print STDERR "apply_mismatch_simple: mism_pat = $mism_pat, tailpat = $tailpat, fullpat = $fullpat\n" if $o_verbose;
+    my $count = -1;
+    $count = count_head_tail(\@h, $tail) if not $o_skip_count;
     return ($fullpat, $count);
 }
 
