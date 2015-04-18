@@ -229,7 +229,7 @@ if ($o_mismatch_simple) {
     die "unable to interpret --mismatch-simple argument" if not $o_mm_int1 or not $o_mm_int2;
     die "must allow 1 to $o_mm_int1_max mismatches" if $o_mm_int1 < 1 or $o_mm_int1 > $o_mm_int1_max;
     die "must span 1 to $o_mm_int2_max 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > $o_mm_int2_max;
-    print STDERR "counting concrete primers may take a long time, consider --skip-count\n" if $o_mm_int1 >= 4 and $o_mm_int2 >= 7;
+    print STDERR "Counting concrete primers may take a long time, consider --skip-count\n" if not $o_skip_count and $o_mm_int1 >= 4 and $o_mm_int2 >= 8;
 }
 
 sub expand_dot($);  # expand '.' in DNA regex
