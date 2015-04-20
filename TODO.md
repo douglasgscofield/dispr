@@ -1,7 +1,6 @@
 TODO
 ----
 
-* find a way to nicely check for module availability (the whole `re::engine::RE2` issue)
 * multiple primer pairs
 * primer pairs from Fasta file
 * fuzzy matching?
@@ -10,6 +9,7 @@ TODO
 DONE
 ----
 
+* Found a way to nicely check for module availability (the whole `re::engine::RE2` issue), need to end the eval with 1: eval 'use re::engine::RE2; 1';
 * using re::engine::RE2 for much faster regex matching
 * simply reverse-complement the calculated pattern
 * Identify amplicons by the primer pair making them... so + strand and - strand are distinguishable

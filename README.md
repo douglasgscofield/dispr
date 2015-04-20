@@ -10,7 +10,7 @@ Given a pair of degenerate primers, find sites in the given genome matching some
 * Fasta-format file of interior sequences, amplicons minus primers
 * BED-format file of interior sequences, amplicons minus primers
 
-A small number of mismatches can be allowed at the 5' end of the primer.  The number of concrete sequences arising from degenerate primers, including when mismatches are allowed, is also calculated.
+A small number of mismatches can be allowed within the primer.  The number of concrete sequences arising from degenerate primers is also calculated.
 
 The `re::engine::RE2` regular expression drop-in module is used as it is much faster than Perl's implementation for the types of patterns matched here.
 
