@@ -13,10 +13,9 @@ my $with_threads = eval 'use threads qw(stringify); 1';
 # allocate 1073741824 bytes for the DFA tables 1 << 30
 # 134217728 1<< 27
 my $with_RE2 = eval 'use re::engine::RE2 -max_mem => 1 << 29; 1';
-if ($with_RE2 and $^O ne 'darwin') {
-    #use re::engine::RE2 -max_mem => 1 << 29;
-    print STDERR "FOUND re::engine::RE2\n";
-}
+#if ($with_RE2 and $^O ne 'darwin') {
+#    print STDERR "FOUND re::engine::RE2\n";
+#}
 
 use strict;
 use warnings;
@@ -48,7 +47,7 @@ my $o_tag;
 my $o_multiplex = 0;
 my $o_orientation = "FR";
 my $o_min = 1;
-my $o_max = 1200;
+my $o_max = 2000;
 my $o_maxmax = 10000;
 my $o_dir = "both";
 my $o_ref;
@@ -70,6 +69,8 @@ my $o_mm_int1;  # number of mismatches
 my $o_mm_int1_max = 5;
 my $o_mm_int2;  # length of 5' sequence to apply mismatches
 my $o_mm_int2_max = 10;
+my $o_mm_int3;  # number of mismatches in remainder of primer
+my $o_mm_int3_max = 1;
 my $o_skip_count = 0;
 
 
@@ -86,7 +87,7 @@ Primer and search parameters:
     --primers FILE           --orientation FR
     --both                   --forward              --reverse
     --tag TAG
-    --mismatch-simple INT1:INT2                     --skip-count
+    --mismatch-simple INT1:INT2[:INT3]              --skip-count
 
 Amplicons:
     --multiplex              --no-multiplex
@@ -144,11 +145,14 @@ Primer and search parameters:
     --forward             CURRENTLY ONLY --both IS SUPPORTED
     --reverse
 
-    --mismatch-simple INT1:INT2
+    --mismatch-simple INT1:INT2[:INT3]
                           Allow up to INT1 mismatches in 5'-most INT2 bp of
-                          each primer.  INT1 must be <= $o_mm_int1_max and INT2 must be
-                          <= $o_mm_int2_max.  To allow up to 2 mismatches in the 5'-most
-                          5 bp:  --mismatch-simple 2:5
+                          each primer, with optionally INT3 mismatches in the
+                          remainder of the primer.  INT1 must be <= $o_mm_int1_max,
+                          INT2 must be <= $o_mm_int2_max, and INT3 must be <= $o_mm_int3_max.
+                          To allow up to 2 mismatches in the 5'-most 5 bp, 
+                          with no mismatches in the remainder:
+                          --mismatch-simple 2:5  OR  --mismatch-simple 2:5:0
     --skip-count          Skip the counting-concrete-primers step of 
                           --mismatch-simple, which can consume a surprising
                           amount of time and memory ing if INT1 and/or INT2
@@ -182,7 +186,7 @@ Input and output files:
     --internal-bed BED    Output, BED file containing internal regions of
                           amplicon positions, which exclude primers
     --internal-seq FASTA  Output, Fasta sequences containing internal regions
-                          identified amplicon sequences, which exclude
+                          of identified amplicon sequences, which exclude
                           primers
 
 Misc:
@@ -232,23 +236,35 @@ die "only both strands currently supported" if $o_dir ne "both";
 die "must provide results name --tag" if not $o_tag;
 die "must provide sequence to search with --ref" if not $o_ref;
 
+
+## re::engine::RE2 regexp engine
+print STDERR iftags()."We found 're::engine::RE2'\n" if $with_RE2;
+print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $with_RE2;
+
+
+## --mismatch-simple option processing
 if ($o_mismatch_simple) {
-    ($o_mm_int1, $o_mm_int2) = split(/:/, $o_mismatch_simple, 2);
+    ($o_mm_int1, $o_mm_int2, $o_mm_int3) = split(/:/, $o_mismatch_simple, 3);
+    $o_mm_int3 = 0 if not defined $o_mm_int3;
     die "unable to interpret --mismatch-simple argument" if not $o_mm_int1 or not $o_mm_int2;
-    die "must allow 1 to $o_mm_int1_max mismatches" if $o_mm_int1 < 1 or $o_mm_int1 > $o_mm_int1_max;
+    die "must allow 1 to $o_mm_int1_max mismatches in 5' end" if $o_mm_int1 < 1 or $o_mm_int1 > $o_mm_int1_max;
     die "must span 1 to $o_mm_int2_max 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > $o_mm_int2_max;
+    die "must allow 0 to $o_mm_int3_max mismatches in remainder" if $o_mm_int3 < 0 or $o_mm_int3 > $o_mm_int3_max;
     print STDERR "Counting concrete primers may take a long time, consider --skip-count\n" if not $o_skip_count and $o_mm_int1 >= 4 and $o_mm_int2 >= 8;
 }
 
-#die "must not specify --threads, UNIMPLEMENTED" if $o_threads;
+
+## Threads
 print STDERR "with_threads = $with_threads\n" if $o_verbose;
 print STDERR "OSNAME = ".$^O."\n" if $o_verbose;
 die "sorry, for some reason threads not possible" if $o_threads and not $with_threads;
 die "must specify 0, 2 or $o_threads_max threads, not $o_threads" if $o_threads and $o_threads != 2 and $o_threads != $o_threads_max;
 $with_threads = $o_threads = 0 if $o_threads <= 1;
 
+
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
+sub create_mismatch($$$$);  # create mismatch sequences from degenerate sequence
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
 sub match_positions($$$);  # search for primer hits
@@ -265,7 +281,8 @@ sub trunc($) {
     return length($s) > $lim ? substr($s, 0, $lim - 11)."<truncated>" : $s;
 }
 
-print STDERR "Assuming primer orientation '$o_orientation' as so, for example primers:
+print STDERR "
+Assuming primer orientation '$o_orientation' as so, for example primers:
 
     Forward:F:ACGTCT
     Reverse:R:TTACGC
@@ -292,34 +309,38 @@ in-silico amplicon.
 
 ";
 
-print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2 ...\n" if $o_mismatch_simple;
+print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
 
-print STDERR iftags()."We found 're::engine::RE2'\n" if $with_RE2;
-print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $with_RE2;
+my $forward_primer = $o_pf[$o_pi - 1];
+my $reverse_primer = $o_pr[$o_pi - 1];
 
-#my %forward = prepare_primer($o_pf[$o_pi - 1]);
-#my %reverse = prepare_primer($o_pr[$o_pi - 1]);
 my %forward;
 my %reverse;
 
 if ($with_threads) {  # we have at least 2 threads
-    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $o_pf[$o_pi - 1]);
-    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $o_pr[$o_pi - 1]);
+    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primer);
+    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primer);
     print STDERR "Preparing forward and reverse primers with threads $forward_t and $reverse_t ...\n" if $o_verbose;
     %forward = $forward_t->join();
     %reverse = $reverse_t->join();
-    print STDERR "Joined threads preparing forward and reverse primers\n" if $o_verbose;
 } else {
-    %forward = prepare_primer($o_pf[$o_pi - 1]);
-    %reverse = prepare_primer($o_pr[$o_pi - 1]);
+    %forward = prepare_primer($forward_primer);
+    %reverse = prepare_primer($reverse_primer);
 }
 
 
-print STDERR iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences\n";
-print STDERR iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement\n";
-print STDERR iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences\n";
-print STDERR iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement\n";
-print STDERR "\n";
+print STDERR "
+Patterns matching unrolled primers:
+".iftags()."forward primer : $forward_primer, ".length($forward_primer)." bp
+".iftags()."reverse primer : $reverse_primer, ".length($reverse_primer)." bp
+
+Patterns matching unrolled primers:
+
+".iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences
+".iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement
+".iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences
+".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
+";
 
 my $do_amplicon = ($o_bed or $o_seq);
 my $do_primer = ($o_primerbed or $o_primerseq);
@@ -367,53 +388,71 @@ while (my $inseq = $in->next_seq()) {
     } else {
         print STDERR "$this_seqname:".iftag()." searching ...\n";
     }
+
     # Any _forward_hits can be complemented by any _revcomp_hits
-    #my @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
-    #my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
-    #my @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
-    #my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+
     my @f_forward_hits;
     my @r_revcomp_hits;
     my @r_forward_hits;
     my @f_revcomp_hits;
-    if ($o_threads == 4) {
-        my $f_forward_t = threads->create({'context' => 'list'}, \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
-        my $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
-        my $r_forward_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
-        my $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
-        print STDERR "Matching F, R, r and f primers with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
-        @f_forward_hits = $f_forward_t->join();
-        @r_revcomp_hits = $r_revcomp_t->join();
-        @r_forward_hits = $r_forward_t->join();
-        @f_revcomp_hits = $f_revcomp_t->join();
-        print STDERR "Joined threads preparing F, R, r and f matches\n" if $o_verbose;
-    } elsif ($o_threads == 2) {  # we have at least 2 threads
-        my $f_forward_t = threads->create({'context' => 'list'}, \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
-        my $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
-        print STDERR "Matching F and R primers with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
-        @f_forward_hits = $f_forward_t->join();
-        @r_revcomp_hits = $r_revcomp_t->join();
-        print STDERR "Joined threads preparing F and R matches\n" if $o_verbose;
 
-        my $r_forward_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
-        my $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
-        print STDERR "Matching r and f primers with thread $r_forward_t and $f_revcomp_t ...\n" if $o_verbose;
+    if ($o_threads == 4) {
+
+        my $f_forward_t = threads->create({'context' => 'list'},
+            \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+        my $r_revcomp_t = threads->create({'context' => 'list'},
+            \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+        my $r_forward_t = threads->create({'context' => 'list'},
+            \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+        my $f_revcomp_t = threads->create({'context' => 'list'},
+            \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+
+        print STDERR "Matching F, R, r and f primers with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
+
+        @f_forward_hits = $f_forward_t->join();
+        @r_revcomp_hits = $r_revcomp_t->join();
         @r_forward_hits = $r_forward_t->join();
         @f_revcomp_hits = $f_revcomp_t->join();
-        print STDERR "Joined threads preparing r and f matches\n" if $o_verbose;
+
+    } elsif ($o_threads == 2) {
+
+        my $f_forward_t = threads->create({'context' => 'list'},
+            \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+        my $r_revcomp_t = threads->create({'context' => 'list'},
+            \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+
+        print STDERR "Matching F and R primers with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
+
+        @f_forward_hits = $f_forward_t->join();
+        @r_revcomp_hits = $r_revcomp_t->join();
+
+        my $r_forward_t = threads->create({'context' => 'list'},
+            \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+        my $f_revcomp_t = threads->create({'context' => 'list'},
+            \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+
+        print STDERR "Matching r and f primers with thread $r_forward_t and $f_revcomp_t ...\n"; # if $o_verbose;
+
+        @r_forward_hits = $r_forward_t->join();
+        @f_revcomp_hits = $f_revcomp_t->join();
+
     } else {
+
+        print STDERR "Matching F, R, r and f primers sequentially ...\n"; # if $o_verbose;
+
         @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
         @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
         @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
         @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
-        print STDERR "Done with unthreaded matching all hits\n" if $o_verbose;
 
     }
 
+    # The remainder of the code in this loop is quick, no need for threads
 
     # Sort and remove duplicate hits that start at the same position.  So long
     # as the sort is stable, the order enforces the duplicate selection
     # hierarchy described in the help.
+    #
     my @forward_hits = sort { $a->[0] <=> $b->[0] } (@f_forward_hits, @r_forward_hits);
     my @revcomp_hits = sort { $a->[0] <=> $b->[0] } (@f_revcomp_hits, @r_revcomp_hits);
     my $n_forward_dups = remove_duplicate_intervals(\@forward_hits);
@@ -497,10 +536,9 @@ sub prepare_primer($) {
     my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
     $dest{SeqPattern} = $seqpattern;
     if ($o_mismatch_simple) {
-        my ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 0);
+        my ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, $o_mm_int3);
         $dest{forwardpattern} = $mmpat;
         $dest{count} = $mmcount;
-        #($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, 1);
         $dest{revcomppattern} = Bio::Tools::SeqPattern->new(-seq => $mmpat, -type => 'dna')->revcom()->expand();
         $dest{mismatch} = $o_mismatch_simple;
         $dest{forward0} = expand_dot($seqpattern->expand());
@@ -520,62 +558,53 @@ sub prepare_primer($) {
         $dest{count} = $iupac->count();
     }
     $dest{forwardquoted} = qr/$dest{forwardpattern}/aai;
-    if ($dest{forwardquoted}->isa("re::engine::RE2")) {
-        print STDERR "forwardquoted processed by RE2\n";
-    } else {
-        print STDERR "forwardquoted processed by Perl's RE engine\n";
-    }
+    print STDERR "forwardquoted processed by ".
+        ($dest{forwardquoted}->isa("re::engine::RE2") ? "RE2" : "Perl RE")."\n" if $o_verbose;
     $dest{revcompquoted} = qr/$dest{revcomppattern}/aai;
-    if ($dest{revcompquoted}->isa("re::engine::RE2")) {
-        print STDERR "revcompquoted processed by RE2\n";
-    } else {
-        print STDERR "revcompquoted processed by Perl's RE engine\n";
-    }
     return %dest;
 }
 
 
 
-# Construct regex from a degenerate primer ($p) having a given number of
-# mismatches ($m) within a given 5' length of sequence ($len), accomodating
-# it possibly needing to be reverse-complemented ($is_rc)
+# Construct a list of sequences having a given number of mismatches within 
+# its full length.  $seq is the sequence, $mism is the number of mismatches
+# to apply, $regexs is a reference to an array to hold the individual regexs,
+# and $degens a reference to an array to hold the individual degenerate
+# sequences.
 #
-sub apply_mismatch_simple($$$$) {
-    my ($p, $mism, $len, $is_rc) = @_;
-    print STDERR "apply_mismatch_simple: p = $p, mism = $mism, len = $len, is_rc = $is_rc\n" if $o_verbose;
-    my ($head, $tail);
-    $head = substr($p, 0, $len); $tail = substr($p, $len);
-    # die "no tail available" if not $tail;  # not necessary, probably
-    print STDERR "head = $head, tail = $tail\n" if $o_verbose;
-    my @h;
-    my @p;
+sub create_mismatch($$$$) {
+    my ($seq, $mism, $degens, $pats) = @_;
+    my $len = length($seq);
+    undef @$degens;
+    undef @$pats;
+    print STDERR "create_mismatch: seq = $seq, mism = $mism\n" if $o_verbose;
     if ($mism == 1) {
         for (my $i = 0; $i < $len; ++$i) {
-            my $s = $head;
+            my $s = $seq;
             substr($s, $i, 1) = "N";
-            push @h, $s;
+            push @$degens, $s;
             my $sp = Bio::Tools::SeqPattern->new(-seq => $s, -type => 'dna');
-            my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+            my $pat = expand_dot($sp->expand());
             print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-            push @p, $pat;
+            push @$pats, $pat;
         }
     } elsif ($mism == 2) {
         for (my $i = 0; $i < $len - 1; ++$i) {
-            my $s = $head;
+            my $s = $seq;
             substr($s, $i, 1) = "N";
             for (my $j = $i + 1; $j < $len; ++$j) {
                 my $ss = $s;
                 substr($ss, $j, 1) = "N";
-                push @h, $ss;
+                push @$degens, $ss;
                 my $sp = Bio::Tools::SeqPattern->new(-seq => $ss, -type => 'dna');
-                my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                my $pat = expand_dot($sp->expand());
                 print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-                push @p, $pat;
+                push @$pats, $pat;
             }
         }
     } elsif ($mism == 3) {
         for (my $i = 0; $i < $len - 2; ++$i) {
-            my $s = $head;
+            my $s = $seq;
             substr($s, $i, 1) = "N";
             for (my $j = $i + 1; $j < $len - 1; ++$j) {
                 my $ss = $s;
@@ -583,17 +612,17 @@ sub apply_mismatch_simple($$$$) {
                 for (my $k = $j + 1; $k < $len; ++$k) {
                     my $sss = $ss;
                     substr($sss, $k, 1) = "N";
-                    push @h, $sss;
+                    push @$degens, $sss;
                     my $sp = Bio::Tools::SeqPattern->new(-seq => $sss, -type => 'dna');
-                    my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                    my $pat = expand_dot($sp->expand());
                     print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-                    push @p, $pat;
+                    push @$pats, $pat;
                 }
             }
         }
     } elsif ($mism == 4) {
         for (my $i = 0; $i < $len - 3; ++$i) {
-            my $s = $head;
+            my $s = $seq;
             substr($s, $i, 1) = "N";
             for (my $j = $i + 1; $j < $len - 2; ++$j) {
                 my $ss = $s;
@@ -604,18 +633,18 @@ sub apply_mismatch_simple($$$$) {
                     for (my $l = $k + 1; $l < $len; ++$l) {
                         my $ssss = $sss;
                         substr($ssss, $l, 1) = "N";
-                        push @h, $ssss;
+                        push @$degens, $ssss;
                         my $sp = Bio::Tools::SeqPattern->new(-seq => $ssss, -type => 'dna');
-                        my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                        my $pat = expand_dot($sp->expand());
                         print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-                        push @p, $pat;
+                        push @$pats, $pat;
                     }
                 }
             }
         }
     } elsif ($mism == 5) {
         for (my $i = 0; $i < $len - 4; ++$i) {
-            my $s = $head;
+            my $s = $seq;
             substr($s, $i, 1) = "N";
             for (my $j = $i + 1; $j < $len - 3; ++$j) {
                 my $ss = $s;
@@ -629,11 +658,11 @@ sub apply_mismatch_simple($$$$) {
                         for (my $m = $l + 1; $m < $len; ++$m) {
                             my $sssss = $ssss;
                             substr($sssss, $m, 1) = "N";
-                            push @h, $sssss;
+                            push @$degens, $sssss;
                             my $sp = Bio::Tools::SeqPattern->new(-seq => $sssss, -type => 'dna');
-                            my $pat = expand_dot($is_rc ? $sp->revcom(1)->expand() : $sp->expand());
+                            my $pat = expand_dot($sp->expand());
                             print STDERR "i = $i, pat = $pat\n" if $o_verbose;
-                            push @p, $pat;
+                            push @$pats, $pat;
                         }
                     }
                 }
@@ -642,48 +671,68 @@ sub apply_mismatch_simple($$$$) {
     } else {
         die "unrecognised number of mismatches $mism";
     }
-    @p = reverse @p if $is_rc;
-    my $mism_pat = '(' . join('|', @p) . ')';
-    my $tp = Bio::Tools::SeqPattern->new(-seq => $tail, -type => 'dna');
-    my ($tailpat, $fullpat);
-    if ($is_rc) {
-        $tailpat = expand_dot($tp->revcom(1)->expand());
-        $fullpat = $tailpat . $mism_pat;
+}
+
+# Construct regex from a degenerate primer ($p) having a given number of
+# mismatches ($m) within a given 5' length of sequence ($len).  Reverse
+# complementing is simple with the Bio::Tools::SeqPattern class, no need
+# to accomodate that here.
+#
+sub apply_mismatch_simple($$$$) {
+    my ($p, $head_mism, $len, $tail_mism) = @_;
+    print STDERR "apply_mismatch_simple: p = $p, head_mism = $head_mism, len = $len, tail_mism = $tail_mism\n" if $o_verbose;
+    my ($head, $tail) = (substr($p, 0, $len), substr($p, $len));
+    print STDERR "head = $head, tail = $tail\n" if $o_verbose;
+    my ($head_count, $tail_count) = (1, 1);
+    my ($head_pat, $tail_pat);
+    if ($head_mism) {
+        my (@degen, @pats);
+        create_mismatch($head, $head_mism, \@degen, \@pats);
+        $head_pat = '(' . join('|', @pats) . ')';
+        $head_count = count_degen(\@degen) if not $o_skip_count;
     } else {
-        $tailpat = expand_dot($tp->expand());
-        $fullpat = $mism_pat . $tailpat;
+        $head_pat = expand_dot(Bio::Tools::SeqPattern->new(
+                -seq => $head, -type => 'dna')->expand());
+        $head_count = Bio::Tools::IUPAC->new(-seq => Bio::Seq->new(
+                -seq => $head, -alphabet => 'dna'))->count();
     }
-    print STDERR "apply_mismatch_simple: mism_pat = $mism_pat, tailpat = $tailpat, fullpat = $fullpat\n" if $o_verbose;
-    my $count = -1;
-    $count = count_head_tail(\@h, $tail) if not $o_skip_count;
-    return ($fullpat, $count);
+    if ($tail_mism) {
+        my (@degen, @pats);
+        create_mismatch($tail, $tail_mism, \@degen, \@pats);
+        $tail_pat = '(' . join('|', @pats) . ')';
+        $tail_count = count_degen(\@degen) if not $o_skip_count;
+    } else {
+        $tail_pat = expand_dot(Bio::Tools::SeqPattern->new(
+                -seq => $tail, -type => 'dna')->expand());
+        $tail_count = Bio::Tools::IUPAC->new(-seq => Bio::Seq->new(
+                -seq => $tail, -alphabet => 'dna'))->count();
+    }
+    my $full_pat = $head_pat . $tail_pat;
+    if ($o_verbose) {
+        print STDERR "
+apply_mismatch_simple: head = $head, head_pat = $head_pat
+apply_mismatch_simple: tail = $tail, tail_pat = $tail_pat
+apply_mismatch_simple: full_pat = $full_pat
+" if $o_verbose;
+    }
+    my $count = $o_skip_count ? -1 : $head_count * $tail_count;
+    return ($full_pat, $count);
 }
 
 
 
-# Calculate the number of unique sequences represented by a mismatch-simple
-# sequence, with a list of alternate head mismatch sequences (@$head) and an
-# also-degenerate but otherwise invariant tail sequence ($tail).  Count the
-# unique sequences in the tail with Bio::Tools::IUPAC, and also use it to
-# to unroll each head sequence, counting the unique sequences across all
-# head sequences, and multiply their number by the tail number for the total.
+
+# Calculate the number of concrete sequences represented by a mismatch-simple
+# sequence with a list of alternate mismatch sequences (@$degen).  Use
+# Bio::Tools::IUPAC, to unroll each head sequence, counting the unique
+# sequences across all head sequences.
 #
-sub count_head_tail($$) {
-    my ($head, $tail) = @_;
-    my $count;
-    if ($tail) {
-        my $iupac = Bio::Tools::IUPAC->new(-seq =>
-            Bio::Seq->new(-seq => $tail, -alphabet => 'dna'));
-        $count = $iupac->count();
-    } else {
-        $count = 1;  # we will be multiplying
-    }
+sub count_degen($) {
+    my ($degen) = @_;
     my %h;
-    my $u = 0;
-    my $n = 0;
-    print STDERR "With mismatches, ".scalar(@$head)." head sequences to examine, and one tail: $tail\n";
-    foreach my $h (@$head) {
-        #my $s = Bio::Seq->new(-seq => $h, -alphabet => 'dna');
+    my ($u, $n) = (0, 0);
+    print STDERR "count_degen: Counting concrete sequences from ".scalar(@$degen)." degen sequences ...\n";# if $o_verbose;
+    foreach my $h (@$degen) {
         ++$n;
         my $iupac = Bio::Tools::IUPAC->new(-seq =>
             Bio::Seq->new(-seq => $h, -alphabet => 'dna'));
@@ -691,11 +740,11 @@ sub count_head_tail($$) {
             $h{$uniqueseq->seq()}++;
             ++$u;
         }
-        print STDERR "After $n-th head: $u unrolled, ".scalar(keys(%h))." unique mismatch sequences\n" if ! ($n % 20);
+        print STDERR "count_degen: After $n-th degen sequence, $u unrolled and ".scalar(keys(%h))." unique concrete sequences\n" if ! ($n % 20);# and $o_verbose;
     }
-    my $head_count = scalar keys %h;
-    print STDERR "count_head_tail: tail count = $count  head_count = $head_count  u = $u  total_count = ".$head_count*$count."\n" if $o_verbose;
-    return $head_count * $count;
+    my $count = scalar keys %h;
+    print STDERR "count_degen: Completed counting $n degen sequences: $u unrolled and $count unique concrete sequences\n";# if $o_verbose;
+    return $count;
 }
 
 
@@ -755,7 +804,6 @@ sub dump_primer_hits($$$) {
         if ($o_primerbed) {
             my $name = "$id:$hit";  # the hit sequence itself
             $name = "$o_tag:$name" if $o_tag;
-            #print $out_primerbed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
             $out_primerbed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_primerseq) {
@@ -818,7 +866,6 @@ sub dump_amplicon_internal_hits($$$$) {
     foreach my $h (@amp) {
         if ($o_bed) {
             my $name = "$o_tag:".$h->[3].":".length($h->[2]);
-            #print $out_bed $seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n";
             $out_bed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_seq) {
@@ -830,7 +877,6 @@ sub dump_amplicon_internal_hits($$$$) {
         }
         if ($o_internalbed) {
             my $name = "$o_tag:".$h->[3].":".length($h->[6]);
-            #print $out_bed $seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n";
             $out_internalbed->print($seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n");
         }
         if ($o_internalseq) {
