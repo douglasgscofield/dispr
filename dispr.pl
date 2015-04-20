@@ -2,15 +2,24 @@
 
 use 5.18.0;
 
-use strict;
-use warnings;
+my $with_threads = eval 'use threads qw(stringify); 1';
+#if ($with_threads) {
+#    use threads qw(stringify);
+#    print STDERR "FOUND threads\n";
+#}
 
 # would love to make this conditional, but can't get it to work
 # allocate 536870912 bytes for the DFA tables 1 << 29
 # allocate 1073741824 bytes for the DFA tables 1 << 30
 # 134217728 1<< 27
-use re::engine::RE2 -max_mem => 1 << 29;
-my $got_RE2 = 1;
+my $with_RE2 = eval 'use re::engine::RE2 -max_mem => 1 << 29; 1';
+if ($with_RE2 and $^O ne 'darwin') {
+    #use re::engine::RE2 -max_mem => 1 << 29;
+    print STDERR "FOUND re::engine::RE2\n";
+}
+
+use strict;
+use warnings;
 
 use Getopt::Long;
 use Bio::Seq;
@@ -178,8 +187,7 @@ Input and output files:
 
 Misc:
 
-    --threads INT         Use up to INT threads (default $o_threads, max $o_threads_max)
-                          (NOT IMPLEMENTED)
+    --threads INT         Use 2 or 4 threads (default $o_threads, max $o_threads_max)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --no-trunc            Do not truncate regexs when displaying
     --verbose             Describe actions
@@ -212,9 +220,10 @@ GetOptions("pf=s"              => \@o_pf,
            "ref=s"             => \$o_ref,
            "bed=s"             => \$o_bed,
            "seq=s"             => \$o_seq,
-           "verbose"           => \$o_verbose,
+           "threads=i"         => \$o_threads,
            "expand-dot"        => \$o_expand_dot,
            "no-trunc"          => \$o_no_trunc,
+           "verbose"           => \$o_verbose,
            "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
@@ -222,8 +231,6 @@ die "only FR orientation currently supported" if $o_orientation ne "FR";
 die "only both strands currently supported" if $o_dir ne "both";
 die "must provide results name --tag" if not $o_tag;
 die "must provide sequence to search with --ref" if not $o_ref;
-die "must not specify --threads, UNIMPLEMENTED" if $o_threads;
-#die "must use 1 to $o_threads_max threads" if $o_threads < 0 or $o_threads > $o_threads_max;
 
 if ($o_mismatch_simple) {
     ($o_mm_int1, $o_mm_int2) = split(/:/, $o_mismatch_simple, 2);
@@ -232,6 +239,13 @@ if ($o_mismatch_simple) {
     die "must span 1 to $o_mm_int2_max 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > $o_mm_int2_max;
     print STDERR "Counting concrete primers may take a long time, consider --skip-count\n" if not $o_skip_count and $o_mm_int1 >= 4 and $o_mm_int2 >= 8;
 }
+
+#die "must not specify --threads, UNIMPLEMENTED" if $o_threads;
+print STDERR "with_threads = $with_threads\n" if $o_verbose;
+print STDERR "OSNAME = ".$^O."\n" if $o_verbose;
+die "sorry, for some reason threads not possible" if $o_threads and not $with_threads;
+die "must specify 0, 2 or $o_threads_max threads, not $o_threads" if $o_threads and $o_threads != 2 and $o_threads != $o_threads_max;
+$with_threads = $o_threads = 0 if $o_threads <= 1;
 
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
@@ -280,11 +294,26 @@ in-silico amplicon.
 
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2 ...\n" if $o_mismatch_simple;
 
-print STDERR iftags()."We found 're::engine::RE2'\n" if $got_RE2;
-print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $got_RE2;
+print STDERR iftags()."We found 're::engine::RE2'\n" if $with_RE2;
+print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $with_RE2;
 
-my %forward = prepare_primer($o_pf[$o_pi - 1]);
-my %reverse = prepare_primer($o_pr[$o_pi - 1]);
+#my %forward = prepare_primer($o_pf[$o_pi - 1]);
+#my %reverse = prepare_primer($o_pr[$o_pi - 1]);
+my %forward;
+my %reverse;
+
+if ($with_threads) {  # we have at least 2 threads
+    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $o_pf[$o_pi - 1]);
+    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $o_pr[$o_pi - 1]);
+    print STDERR "Preparing forward and reverse primers with threads $forward_t and $reverse_t ...\n" if $o_verbose;
+    %forward = $forward_t->join();
+    %reverse = $reverse_t->join();
+    print STDERR "Joined threads preparing forward and reverse primers\n" if $o_verbose;
+} else {
+    %forward = prepare_primer($o_pf[$o_pi - 1]);
+    %reverse = prepare_primer($o_pr[$o_pi - 1]);
+}
+
 
 print STDERR iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences\n";
 print STDERR iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement\n";
@@ -339,10 +368,48 @@ while (my $inseq = $in->next_seq()) {
         print STDERR "$this_seqname:".iftag()." searching ...\n";
     }
     # Any _forward_hits can be complemented by any _revcomp_hits
-    my @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
-    my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
-    my @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
-    my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+    #my @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
+    #my @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
+    #my @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
+    #my @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+    my @f_forward_hits;
+    my @r_revcomp_hits;
+    my @r_forward_hits;
+    my @f_revcomp_hits;
+    if ($o_threads == 4) {
+        my $f_forward_t = threads->create({'context' => 'list'}, \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+        my $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+        my $r_forward_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+        my $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+        print STDERR "Matching F, R, r and f primers with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
+        @f_forward_hits = $f_forward_t->join();
+        @r_revcomp_hits = $r_revcomp_t->join();
+        @r_forward_hits = $r_forward_t->join();
+        @f_revcomp_hits = $f_revcomp_t->join();
+        print STDERR "Joined threads preparing F, R, r and f matches\n" if $o_verbose;
+    } elsif ($o_threads == 2) {  # we have at least 2 threads
+        my $f_forward_t = threads->create({'context' => 'list'}, \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+        my $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+        print STDERR "Matching F and R primers with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
+        @f_forward_hits = $f_forward_t->join();
+        @r_revcomp_hits = $r_revcomp_t->join();
+        print STDERR "Joined threads preparing F and R matches\n" if $o_verbose;
+
+        my $r_forward_t = threads->create({'context' => 'list'}, \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+        my $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+        print STDERR "Matching r and f primers with thread $r_forward_t and $f_revcomp_t ...\n" if $o_verbose;
+        @r_forward_hits = $r_forward_t->join();
+        @f_revcomp_hits = $f_revcomp_t->join();
+        print STDERR "Joined threads preparing r and f matches\n" if $o_verbose;
+    } else {
+        @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
+        @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
+        @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
+        @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+        print STDERR "Done with unthreaded matching all hits\n" if $o_verbose;
+
+    }
+
 
     # Sort and remove duplicate hits that start at the same position.  So long
     # as the sort is stable, the order enforces the duplicate selection
