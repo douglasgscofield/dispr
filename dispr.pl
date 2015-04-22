@@ -17,6 +17,7 @@ use Bio::Seq;
 use Bio::SeqIO;
 use Bio::Tools::IUPAC;
 use Bio::Tools::SeqPattern;
+#use Data::Dumper::Perltidy;
 
 #"class1:F:CTNCAYVARCCYATGTAYYWYTTBYT"
 #"class1:R:GTYYTNACHCYRTAVAYRATRGGRTT"
@@ -51,6 +52,7 @@ my $o_internalbed;
 my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_no_trunc = 0;
+my $o_optimise = 0;
 my $o_verbose;
 my $o_help;
 my $o_threads = 0;# 4;
@@ -93,7 +95,7 @@ Input and output files:
 
 Misc:
     --expand-dot             --verbose              --help
-    --no-trunc               --threads
+    --no-trunc               --threads              --optimise
 ";
 
 my $usage = "
@@ -183,6 +185,9 @@ Input and output files:
 
 Misc:
 
+    --optimise            Optimise pattern searching by looking first for the tail,
+                          which typically has fewer mismatches, then for the head
+                          wherever tail candidates have been found
     --threads INT         Use 2 or 4 threads (default $o_threads, max $o_threads_max)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --no-trunc            Do not truncate regexs when displaying
@@ -216,6 +221,8 @@ GetOptions("pf=s"              => \@o_pf,
            "ref=s"             => \$o_ref,
            "bed=s"             => \$o_bed,
            "seq=s"             => \$o_seq,
+           "optimise"          => \$o_optimise,
+           "optimize"          => \$o_optimise,
            "threads=i"         => \$o_threads,
            "expand-dot"        => \$o_expand_dot,
            "no-trunc"          => \$o_no_trunc,
@@ -260,6 +267,7 @@ sub create_mismatch($$$$);  # create mismatch sequences from degenerate sequence
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
 sub match_positions($$$);  # search for primer hits
+sub match_positions_optimise($$$$$$$);  # search for head and tail of primer hits separately
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
 sub dump_amplicon_internal_hits($$$$);  # calculate and dump amplicons and internal hits
@@ -392,16 +400,33 @@ while (my $inseq = $in->next_seq()) {
 
     if ($o_threads == 4) {
 
-        my $f_forward_t = threads->create({'context' => 'list'},
-            \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
-        my $r_revcomp_t = threads->create({'context' => 'list'},
-            \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
-        my $r_forward_t = threads->create({'context' => 'list'},
-            \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
-        my $f_revcomp_t = threads->create({'context' => 'list'},
-            \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+        my ($f_forward_t, $r_revcomp_t, $r_forward_t, $f_revcomp_t);
 
-        print STDERR "Matching F, R, r and f primers with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
+        if ($o_optimise) {
+            $f_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $forward{forwardheadquoted}, $forward{forwardtailquoted},
+                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "F");
+            $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $reverse{revcompheadquoted}, $reverse{revcomptailquoted},
+                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "R");
+            $r_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $reverse{forwardheadquoted}, $reverse{forwardtailquoted},
+                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "r");
+            $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $forward{revcompheadquoted}, $forward{revcomptailquoted},
+                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "f");
+            print STDERR "Matching F, R, r and f primers optimised with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
+        } else {
+            $f_forward_t = threads->create({'context' => 'list'},
+                \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+            $r_revcomp_t = threads->create({'context' => 'list'},
+                \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+            $r_forward_t = threads->create({'context' => 'list'},
+                \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+            $f_revcomp_t = threads->create({'context' => 'list'},
+                \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+            print STDERR "Matching F, R, r and f primers with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
+        }
 
         @f_forward_hits = $f_forward_t->join();
         @r_revcomp_hits = $r_revcomp_t->join();
@@ -410,34 +435,82 @@ while (my $inseq = $in->next_seq()) {
 
     } elsif ($o_threads == 2) {
 
-        my $f_forward_t = threads->create({'context' => 'list'},
-            \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
-        my $r_revcomp_t = threads->create({'context' => 'list'},
-            \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+        my ($f_forward_t, $r_revcomp_t, $r_forward_t, $f_revcomp_t);
 
-        print STDERR "Matching F and R primers with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
+        if ($o_optimise) {
+            $f_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $forward{forwardheadquoted}, $forward{forwardtailquoted},
+                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "F");
+            $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $reverse{revcompheadquoted}, $reverse{revcomptailquoted},
+                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "R");
+            print STDERR "Matching F and R primers optimised with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
+        } else {
+            $f_forward_t = threads->create({'context' => 'list'},
+                \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+            $r_revcomp_t = threads->create({'context' => 'list'},
+                \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+            print STDERR "Matching F and R primers with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
+        }
 
         @f_forward_hits = $f_forward_t->join();
         @r_revcomp_hits = $r_revcomp_t->join();
 
-        my $r_forward_t = threads->create({'context' => 'list'},
-            \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
-        my $f_revcomp_t = threads->create({'context' => 'list'},
-            \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
-
-        print STDERR "Matching r and f primers with thread $r_forward_t and $f_revcomp_t ...\n"; # if $o_verbose;
+        if ($o_optimise) {
+            $r_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $reverse{forwardheadquoted}, $reverse{forwardtailquoted},
+                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "r");
+            $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
+                $forward{revcompheadquoted}, $forward{revcomptailquoted},
+                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "f");
+            print STDERR "Matching r and f primers optimised with thread $r_forward_t and $f_revcomp_t ...\n"; # if $o_verbose;
+        } else {
+            $r_forward_t = threads->create({'context' => 'list'},
+                \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+            $f_revcomp_t = threads->create({'context' => 'list'},
+                \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+            print STDERR "Matching r and f primers with thread $r_forward_t and $f_revcomp_t ...\n"; # if $o_verbose;
+        }
 
         @r_forward_hits = $r_forward_t->join();
         @f_revcomp_hits = $f_revcomp_t->join();
 
     } else {
 
-        print STDERR "Matching F, R, r and f primers sequentially ...\n"; # if $o_verbose;
+        if ($o_optimise) {
 
-        @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
-        @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
-        @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
-        @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+            print STDERR "Matching F, R, r and f primers optimised, sequentially ...\n"; # if $o_verbose;
+
+            @f_forward_hits = match_positions_optimise($forward{forwardheadquoted},
+                $forward{forwardtailquoted}, $forward{headlen}, $forward{taillen}, 0,
+                \$this_sequence, "F");
+            #print STDERR "$this_seqname:".iftag()." f forward hits ".scalar(@f_forward_hits)."\n"; print STDERR Dumper(\@f_forward_hits);
+            @r_revcomp_hits = match_positions_optimise($reverse{revcompheadquoted},
+                $reverse{revcomptailquoted}, $reverse{headlen}, $reverse{taillen}, 1,
+                \$this_sequence, "R");
+            #print STDERR "$this_seqname:".iftag()." r revcomp hits ".scalar(@r_revcomp_hits)."\n"; print STDERR Dumper(\@r_revcomp_hits);
+            @r_forward_hits = match_positions_optimise($reverse{forwardheadquoted},
+                $reverse{forwardtailquoted}, $reverse{headlen}, $reverse{taillen}, 0,
+                \$this_sequence, "r");
+            #print STDERR "$this_seqname:".iftag()." r forward hits ".scalar(@r_forward_hits)."\n"; print STDERR Dumper(\@r_forward_hits);
+            @f_revcomp_hits = match_positions_optimise($forward{revcompheadquoted},
+                $forward{revcomptailquoted}, $forward{headlen}, $forward{taillen}, 1,
+                \$this_sequence, "f");
+            #print STDERR "$this_seqname:".iftag()." f revcomp hits ".scalar(@f_revcomp_hits)."\n"; print STDERR Dumper(\@f_revcomp_hits);
+
+        } else {
+
+            print STDERR "Matching F, R, r and f primers sequentially ...\n"; # if $o_verbose;
+
+            @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
+            #print STDERR "$this_seqname:".iftag()." f forward hits ".scalar(@f_forward_hits)."\n"; print STDERR Dumper(\@f_forward_hits);
+            @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
+            #print STDERR "$this_seqname:".iftag()." r revcomp hits ".scalar(@r_revcomp_hits)."\n"; print STDERR Dumper(\@r_revcomp_hits);
+            @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
+            #print STDERR "$this_seqname:".iftag()." r forward hits ".scalar(@r_forward_hits)."\n"; print STDERR Dumper(\@r_forward_hits);
+            @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+            #print STDERR "$this_seqname:".iftag()." f revcomp hits ".scalar(@f_revcomp_hits)."\n"; print STDERR Dumper(\@f_revcomp_hits);
+        }
 
     }
 
@@ -534,20 +607,39 @@ sub prepare_primer($) {
     my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
     $dest{SeqPattern} = $seqpattern;
     if ($o_mismatch_simple) {
-        my ($mmpat, $mmcount) = apply_mismatch_simple($primer, $o_mm_int1, $o_mm_int2, $o_mm_int3);
+        my ($mmpat, $headpat, $tailpat, $mmcount) = apply_mismatch_simple(
+            $primer, $o_mm_int1, $o_mm_int2, $o_mm_int3);
         $dest{forwardpattern} = $mmpat;
+        $dest{forwardheadpattern} = $headpat;
+        $dest{forwardtailpattern} = $tailpat;
+        $dest{headlen} = $o_mm_int2;
+        $dest{taillen} = length($primer) - $o_mm_int2;
         $dest{count} = $mmcount;
         $dest{revcomppattern} = Bio::Tools::SeqPattern->new(-seq => $mmpat, -type => 'dna')->revcom()->expand();
+        $dest{revcompheadpattern} = Bio::Tools::SeqPattern->new(-seq => $headpat, -type => 'dna')->revcom()->expand();
+        $dest{revcomptailpattern} = Bio::Tools::SeqPattern->new(-seq => $tailpat, -type => 'dna')->revcom()->expand();
         $dest{mismatch} = $o_mismatch_simple;
         $dest{forward0} = expand_dot($seqpattern->expand());
         $dest{revcomp0} = expand_dot($seqpattern->revcom(1)->expand());
         my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
         $dest{IUPAC0} = $iupac;
         $dest{count0} = $iupac->count();
-        print STDERR "forwardpattern    $dest{forwardpattern}\n" if $o_verbose;
-        print STDERR "revcomppattern    $dest{revcomppattern}\n" if $o_verbose;
-        print STDERR "forward0          $dest{forward0}\n" if $o_verbose;
-        print STDERR "revcomp0          $dest{revcomp0}\n" if $o_verbose;
+        if ($o_verbose) {
+            print STDERR "forwardpattern      $dest{forwardpattern}\n";
+            print STDERR "revcomppattern      $dest{revcomppattern}\n";
+            print STDERR "headlen             $dest{headlen}\n";
+            print STDERR "taillen             $dest{taillen}\n";
+            print STDERR "forwardheadpattern  $dest{forwardheadpattern}\n";
+            print STDERR "revcompheadpattern  $dest{revcompheadpattern}\n";
+            print STDERR "forwardtailpattern  $dest{forwardtailpattern}\n";
+            print STDERR "revcomptailpattern  $dest{revcomptailpattern}\n";
+            print STDERR "forward0            $dest{forward0}\n";
+            print STDERR "revcomp0            $dest{revcomp0}\n";
+        }
+        $dest{forwardheadquoted} = qr/$dest{forwardheadpattern}/aai;
+        $dest{forwardtailquoted} = qr/$dest{forwardtailpattern}/aai;
+        $dest{revcompheadquoted} = qr/$dest{revcompheadpattern}/aai;
+        $dest{revcomptailquoted} = qr/$dest{revcomptailpattern}/aai;
     } else {
         $dest{forwardpattern} = expand_dot($seqpattern->expand());
         $dest{revcomppattern} = expand_dot($seqpattern->revcom(1)->expand());
@@ -718,7 +810,7 @@ apply_mismatch_simple: full_pat = $full_pat
 " if $o_verbose;
     }
     my $count = $o_skip_count ? -1 : $head_count * $tail_count;
-    return ($full_pat, $count);
+    return ($full_pat, $head_pat, $tail_pat, $count);
 }
 
 
@@ -767,6 +859,64 @@ sub match_positions($$$) {
         my $hit = substr($$seq, $beg, $end - $beg);
         print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_verbose;
         push @ans, [ $beg, $end, $hit, $id ];
+    }
+    return @ans;
+}
+
+
+
+# Passed in a pattern quoted with 'qr/.../aai', a reference to a sequence to
+# search, and an ID to mark each hit.  Returns an array of anonymous arrays
+# containing the 0-based beginning and end of the hit and the sequence of the
+# hit.  The interval is [beg, end), the same as a BED interval, and each
+# anonymous array contains
+#
+# [ $beg, $end, $hit_sequence ]
+#
+###
+#
+# @f_revcomp_hits = match_positions_optimise($forward{revcompheadquoted},
+#     $forward{revcomptailquoted}, $forward{headlen}, $forward{taillen}, 1,
+#     \$this_sequence, "f");
+#
+
+sub match_positions_optimise($$$$$$$) {
+    my ($headpat, $tailpat, $headlen, $taillen, $is_rc, $seq, $id) = @_;
+    my @ans;
+    my ($head_hits, $tail_hits) = (0, 0);
+    while ($$seq =~ /$tailpat/aaig) {
+        my ($tailbeg, $tailend) = ($-[0], $+[0]);
+        ++$tail_hits;
+        my $tail = substr($$seq, $tailbeg, $tailend - $tailbeg);
+        #print STDERR "match_positions_optimise: $id  tail#$tail_hits  $tailbeg-$tailend   $tail\n";# if $o_verbose;
+        my ($headbeg, $headend);
+        if ($is_rc) {
+            $headbeg = $tailend;
+            $headend = $headbeg + $headlen;
+        } else {
+            $headend = $tailbeg;
+            $headbeg = $headend - $headlen;
+        }
+        my $head = substr($$seq, $headbeg, $headend - $headbeg);
+        #print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $head\n";# if $o_verbose;
+        #print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $headpat\n";# if $o_verbose;
+        if ($head =~ /$headpat/aai) {
+            #print STDERR "match_positions_optimise:   $headpat  matches  $head\n";# if $o_verbose;
+            ++$head_hits;
+            my ($beg, $end, $hit);
+            if ($is_rc) {
+                $beg = $tailbeg;
+                $end = $headend;
+                $hit = $tail . $head;
+            } else {
+                $beg = $headbeg;
+                $end = $tailend;
+                $hit = $head . $tail;
+            }
+            push @ans, [ $beg, $end, $hit, $id ];
+        } else {
+            #print STDERR "match_positions_optimise:   $headpat  does no match  $head\n";# if $o_verbose;
+        }
     }
     return @ans;
 }
