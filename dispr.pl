@@ -1,21 +1,13 @@
 #!/usr/bin/env perl
 
-use 5.18.0;
+use 5.18.4;  # needed for UPPMAX, this perl version compiled with threads
 
 my $with_threads = eval 'use threads qw(stringify); 1';
-#if ($with_threads) {
-#    use threads qw(stringify);
-#    print STDERR "FOUND threads\n";
-#}
 
-# would love to make this conditional, but can't get it to work
 # allocate 536870912 bytes for the DFA tables 1 << 29
 # allocate 1073741824 bytes for the DFA tables 1 << 30
 # 134217728 1<< 27
 my $with_RE2 = eval 'use re::engine::RE2 -max_mem => 1 << 29; 1';
-#if ($with_RE2 and $^O ne 'darwin') {
-#    print STDERR "FOUND re::engine::RE2\n";
-#}
 
 use strict;
 use warnings;
@@ -70,7 +62,7 @@ my $o_mm_int1_max = 5;
 my $o_mm_int2;  # length of 5' sequence to apply mismatches
 my $o_mm_int2_max = 10;
 my $o_mm_int3;  # number of mismatches in remainder of primer
-my $o_mm_int3_max = 1;
+my $o_mm_int3_max = 2;
 my $o_skip_count = 0;
 
 
@@ -357,12 +349,14 @@ my ($in,
 sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
 $in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or diefile($o_ref);
+
 if ($o_seq) {
     $out_seq = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or diefile($o_ref);
 }
 if ($o_bed) {
     open($out_bed, ">$o_bed") or diefile($o_ref);
 }
+
 if ($o_primerseq) {
     $out_primerseq = Bio::SeqIO->new(-file => ">$o_primerseq", -format => 'fasta') or diefile($o_ref);
 }
@@ -483,8 +477,12 @@ $out_primerbed->close() if $out_primerbed;
 
 # By default Bio::Tools::SeqPattern->expand() replaces N with . in the
 # regex it returns.  Though this is strictly correct when enforcing a
-# DNA alphabet, I would prefer it be more explicit.  This replaces '.'
-# with '[ACTGN]'.
+# DNA alphabet, in some cases it might be better to be more explicit.
+# This replaces '.' with '[ACTGN]'.
+#
+# For complex searches involving lots of allowed mismatches, it might
+# be faster to keep the dots, so I have made the default not to expand
+# dots.  I have not benchmarked this.
 #
 sub expand_dot($) {
     my $pat = shift;
@@ -571,6 +569,9 @@ sub prepare_primer($) {
 # to apply, $regexs is a reference to an array to hold the individual regexs,
 # and $degens a reference to an array to hold the individual degenerate
 # sequences.
+#
+# There is a cleaner way to put this code together but I just haven't taken
+# the time to find it yet as this is working fine.
 #
 sub create_mismatch($$$$) {
     my ($seq, $mism, $degens, $pats) = @_;
@@ -673,10 +674,11 @@ sub create_mismatch($$$$) {
     }
 }
 
+
+
 # Construct regex from a degenerate primer ($p) having a given number of
-# mismatches ($m) within a given 5' length of sequence ($len).  Reverse
-# complementing is simple with the Bio::Tools::SeqPattern class, no need
-# to accomodate that here.
+# mismatches ($head_mism) within a given 5' length of sequence ($len), and
+# additional mismatches ($tail_mism) in the remainder of the sequence.
 #
 sub apply_mismatch_simple($$$$) {
     my ($p, $head_mism, $len, $tail_mism) = @_;
