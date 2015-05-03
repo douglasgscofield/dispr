@@ -43,6 +43,9 @@ my $o_min = 1;
 my $o_max = 2000;
 my $o_maxmax = 10000;
 my $o_dir = "both";
+my $o_focalsites_bed;
+my $o_focalbounds;
+my ($o_focalbounds_up, $o_focalbounds_down) = (1000, 1000);
 my $o_ref;
 my $o_bed;
 my $o_seq;
@@ -82,6 +85,7 @@ Primer and search parameters:
     --both                   --forward              --reverse
     --tag TAG
     --mismatch-simple INT1:INT2[:INT3]              --skip-count
+    --focal-bed BED          --focal-bounds INT1[:INT2]
 
 Amplicons:
     --multiplex              --no-multiplex
@@ -153,6 +157,15 @@ Primer and search parameters:
                           are large.  If this option is used, the count is
                           reported as -1.
 
+    --focal-sites BED     Focus search for matches on regions surrounding sites
+                          presented in BED, see also --focal-bounds
+    --focal-bounds INT1[:INT2]
+                          Relative to sites given in --focal-sites, scan
+                          upstream of the 5' extent INT1 bp and downstream of
+                          the 3' extent INT2 bp.  Both values must be positive
+                          integers.  If INT2 is not provided, its value is
+                          taken from INT1.  [defaults $o_focalbounds_up : $o_focalbounds_down]
+
 Amplicons:
 
     --multiplex           If more than one primer pair presented, consider
@@ -209,6 +222,8 @@ GetOptions("pf=s"              => \@o_pf,
            "reverse"           => sub { $o_dir = "reverse" },
            "mismatch-simple=s" => \$o_mismatch_simple,
            "skip-count"        => \$o_skip_count,
+           "focal-sites=s"     => \$o_focalsites_bed,
+           "focal-bounds=s"    => \$o_focalbounds,
            "primer-bed=s"      => \$o_primerbed,
            "primer-seq=s"      => \$o_primerseq,
            "internal-bed=s"    => \$o_internalbed,
@@ -252,6 +267,12 @@ if ($o_mismatch_simple) {
     print STDERR "Counting concrete primers may take a long time, consider --skip-count\n" if not $o_skip_count and $o_mm_int1 >= 4 and $o_mm_int2 >= 8;
 }
 
+## --focal-bounds option processing
+if ($o_focalbounds) {
+    ($o_focalbounds_up, $o_focalbounds_down) = split(/:/, $o_focalbounds, 2);
+    $o_focalbounds_down = $o_focalbounds_up if not defined $o_focalbounds_down;
+}
+
 
 ## Threads
 print STDERR "with_threads = $with_threads\n" if $o_verbose;
@@ -281,7 +302,7 @@ sub trunc($) {
     return length($s) > $lim ? substr($s, 0, $lim - 11)."<truncated>" : $s;
 }
 
-print STDERR "
+print STDERR qq{
 Assuming primer orientation '$o_orientation' as so, for example primers:
 
     Forward:F:ACGTCT
@@ -304,10 +325,16 @@ Maximum amplicon length: $o_max bp
 The maximum distance tracked between suitable primer pairs is $o_maxmax bp.
 Potential amplicons longer than $o_maxmax bp are not tracked.
 
-In future I may add an indication of which primer pair delimited which
-in-silico amplicon.
+};
 
-";
+print STDERR qq{
+The search is confined to focal sites as indicated by regions from the
+BED file '$o_focalsites_bed'.
+
+Upstream bounds from 5' end of regions:   $o_focalbounds_up bp
+Downstream bounds from 3' end of regions: $o_focalbounds_down bp
+
+} if $o_focalsites_bed;
 
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
 

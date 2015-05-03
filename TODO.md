@@ -1,9 +1,13 @@
 TODO
 ----
 
+* Figure out why some hits are missing with --optimise
+* Enable focused hits with --focal-sites BED --focal-bounds INT[:INT]
+* Can I figure out how many mismatches each hit required?
 * multiple primer pairs
 * primer pairs from Fasta file
 * fuzzy matching?
+* Begin writing
 
 
 DONE
