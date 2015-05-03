@@ -380,6 +380,7 @@ my ($in,
     $out_seq, $out_bed,
     $out_primerseq, $out_primerbed,
     $out_internalseq, $out_internalbed);
+my %focalsites;
 
 sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
@@ -404,6 +405,22 @@ if ($o_internalseq) {
 }
 if ($o_internalbed) {
     open($out_internalbed, ">$o_internalbed") or diefile($o_ref);
+}
+
+if ($o_focalsites_bed) {
+    my $fbed;
+    open($fbed, "<$o_focalsites_bed") or diefile($o_focalsites_bed);
+    # read bed, create hash entries for each sequence
+    while (<$fbed>) {
+        chomp;
+        my ($s, $l, $r, $x) = split(/\t/, $_, 4);
+        $focalsites{$s} = () if not exists $focalsites{$s};
+        push @{$focalsites{$s}}, [ $l + 1, $r ];
+    }
+    # sort intervals within each sequence
+    foreach my $k (sort keys %focalsites) {
+        @{$focalsites{$k}} = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @{$focalsites{$k}};
+    }
 }
 
 my $Un;
