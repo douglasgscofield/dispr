@@ -43,7 +43,7 @@ my $o_min = 1;
 my $o_max = 2000;
 my $o_maxmax = 10000;
 my $o_dir = "both";
-my $o_focalsites_bed;
+my $o_focalsites;
 my $o_focalbounds;
 my ($o_focalbounds_up, $o_focalbounds_down) = (1000, 1000);
 my $o_ref;
@@ -224,7 +224,7 @@ GetOptions("pf=s"              => \@o_pf,
            "reverse"           => sub { $o_dir = "reverse" },
            "mismatch-simple=s" => \$o_mismatch_simple,
            "skip-count"        => \$o_skip_count,
-           "focal-sites=s"     => \$o_focalsites_bed,
+           "focal-sites=s"     => \$o_focalsites,
            "focal-bounds=s"    => \$o_focalbounds,
            "primer-bed=s"      => \$o_primerbed,
            "primer-seq=s"      => \$o_primerseq,
@@ -269,9 +269,12 @@ if ($o_mismatch_simple) {
 }
 
 ## --focal-bounds option processing
-if ($o_focalbounds) {
+if ($o_focalsites) {
+    # these restrictions are to make the source code simpler, plus their
+    # speedups are probably not that important if we are using focal sites
     die "--optimise may not be used with --focal-sites" if $o_optimise;
-    ($o_focalbounds_up, $o_focalbounds_down) = split(/:/, $o_focalbounds, 2);
+    die "--threads may not be used with --focal-sites" if $o_threads;
+    ($o_focalbounds_up, $o_focalbounds_down) = split(/:/, $o_focalbounds, 2) if $o_focalbounds;
     $o_focalbounds_down = $o_focalbounds_up if not defined $o_focalbounds_down;
 }
 
@@ -344,12 +347,12 @@ be helpful.
 
 print STDERR qq{
 The search is confined to focal sites as indicated by regions from the
-BED file '$o_focalsites_bed'.
+BED file '$o_focalsites'.
 
 Search boundary upstream from 5' end of regions:   $o_focalbounds_up bp
 Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
 
-} if $o_focalsites_bed;
+} if $o_focalsites;
 
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
 
@@ -407,28 +410,25 @@ if ($o_seq) {
 if ($o_bed) {
     open($out_bed, ">$o_bed") or diefile($o_ref);
 }
-
 if ($o_primerseq) {
     $out_primerseq = Bio::SeqIO->new(-file => ">$o_primerseq", -format => 'fasta') or diefile($o_ref);
 }
 if ($o_primerbed) {
     open($out_primerbed, ">$o_primerbed") or diefile($o_ref);
 }
-
 if ($o_internalseq) {
     $out_internalseq = Bio::SeqIO->new(-file => ">$o_internalseq", -format => 'fasta') or diefile($o_ref);
 }
-
 if ($o_internalbed) {
     open($out_internalbed, ">$o_internalbed") or diefile($o_ref);
 }
 
-if ($o_focalsites_bed) {
+if ($o_focalsites) {
     #
     # Fill %focalsites hash with an array of sorted focal regions for each sequence
     #
     my $fbed;
-    open($fbed, "<$o_focalsites_bed") or diefile($o_focalsites_bed);
+    open($fbed, "<$o_focalsites") or diefile($o_focalsites);
     while (<$fbed>) {
         chomp;
         my ($s, $l, $r, $x) = split(/\t/, $_, 4);
@@ -541,36 +541,38 @@ while (my $inseq = $in->next_seq()) {
         if ($o_optimise) {
 
             print STDERR "Matching F, R, r and f primers optimised, sequentially ...\n"; # if $o_verbose;
-
             @f_forward_hits = match_positions_optimise($forward{forwardheadquoted},
                 $forward{forwardtailquoted}, $forward{headlen}, $forward{taillen}, 0,
                 $inseq, "F");
-            #print STDERR "$this_seqname:".iftag()." f forward hits ".scalar(@f_forward_hits)."\n"; print STDERR Dumper(\@f_forward_hits);
             @r_revcomp_hits = match_positions_optimise($reverse{revcompheadquoted},
                 $reverse{revcomptailquoted}, $reverse{headlen}, $reverse{taillen}, 1,
                 $inseq, "R");
-            #print STDERR "$this_seqname:".iftag()." r revcomp hits ".scalar(@r_revcomp_hits)."\n"; print STDERR Dumper(\@r_revcomp_hits);
             @r_forward_hits = match_positions_optimise($reverse{forwardheadquoted},
                 $reverse{forwardtailquoted}, $reverse{headlen}, $reverse{taillen}, 0,
                 $inseq, "r");
-            #print STDERR "$this_seqname:".iftag()." r forward hits ".scalar(@r_forward_hits)."\n"; print STDERR Dumper(\@r_forward_hits);
             @f_revcomp_hits = match_positions_optimise($forward{revcompheadquoted},
                 $forward{revcomptailquoted}, $forward{headlen}, $forward{taillen}, 1,
                 $inseq, "f");
-            #print STDERR "$this_seqname:".iftag()." f revcomp hits ".scalar(@f_revcomp_hits)."\n"; print STDERR Dumper(\@f_revcomp_hits);
+
+        } elsif ($o_focalsites) {
+
+            print STDERR "Matching F, R, r and f primers near focal sites ...\n"; # if $o_verbose;
+            @f_forward_hits = match_positions_focal($forward{forwardquoted}, $inseq,
+                                                    \$focalsites{$this_seqname}, "F");
+            @r_revcomp_hits = match_positions_focal($reverse{revcompquoted}, $inseq,
+                                                    \$focalsites{$this_seqname}, "R");
+            @r_forward_hits = match_positions_focal($reverse{forwardquoted}, $inseq,
+                                                    \$focalsites{$this_seqname}, "r");
+            @f_revcomp_hits = match_positions_focal($forward{revcompquoted}, $inseq,
+                                                    \$focalsites{$this_seqname}, "f");
 
         } else {
 
             print STDERR "Matching F, R, r and f primers sequentially ...\n"; # if $o_verbose;
-
             @f_forward_hits = match_positions($forward{forwardquoted}, $inseq, "F");
-            #print STDERR "$this_seqname:".iftag()." f forward hits ".scalar(@f_forward_hits)."\n"; print STDERR Dumper(\@f_forward_hits);
             @r_revcomp_hits = match_positions($reverse{revcompquoted}, $inseq, "R");
-            #print STDERR "$this_seqname:".iftag()." r revcomp hits ".scalar(@r_revcomp_hits)."\n"; print STDERR Dumper(\@r_revcomp_hits);
             @r_forward_hits = match_positions($reverse{forwardquoted}, $inseq, "r");
-            #print STDERR "$this_seqname:".iftag()." r forward hits ".scalar(@r_forward_hits)."\n"; print STDERR Dumper(\@r_forward_hits);
             @f_revcomp_hits = match_positions($forward{revcompquoted}, $inseq, "f");
-            #print STDERR "$this_seqname:".iftag()." f revcomp hits ".scalar(@f_revcomp_hits)."\n"; print STDERR Dumper(\@f_revcomp_hits);
         }
 
     }
@@ -876,7 +878,6 @@ apply_mismatch_simple: full_pat = $full_pat
 
 
 
-
 # Calculate the number of concrete sequences represented by a mismatch-simple
 # sequence with a list of alternate mismatch sequences (@$degen).  Use
 # Bio::Tools::IUPAC, to unroll each head sequence, counting the unique
@@ -980,7 +981,6 @@ sub match_positions_focal($$$$) {
 #     $forward{revcomptailquoted}, $forward{headlen}, $forward{taillen}, 1,
 #     \$this_sequence, "f");
 #
-
 sub match_positions_optimise($$$$$$$) {
     my ($headpat, $tailpat, $headlen, $taillen, $is_rc, $bioseq, $id) = @_;
     my @ans;
