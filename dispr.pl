@@ -164,7 +164,9 @@ Primer and search parameters:
                           upstream of the 5' extent INT1 bp and downstream of
                           the 3' extent INT2 bp.  Both values must be positive
                           integers.  If INT2 is not provided, its value is
-                          taken from INT1.  [defaults $o_focalbounds_up : $o_focalbounds_down]
+                          taken from INT1.  Positive values extend the region
+                          up- and downstream, while negative values restrict
+                          it.  [defaults $o_focalbounds_up : $o_focalbounds_down]
 
 Amplicons:
 
@@ -236,8 +238,7 @@ GetOptions("pf=s"              => \@o_pf,
            "ref=s"             => \$o_ref,
            "bed=s"             => \$o_bed,
            "seq=s"             => \$o_seq,
-           "optimise"          => \$o_optimise,
-           "optimize"          => \$o_optimise,
+           "optimi[sz]e"       => \$o_optimise,
            "threads=i"         => \$o_threads,
            "expand-dot"        => \$o_expand_dot,
            "no-trunc"          => \$o_no_trunc,
@@ -269,6 +270,7 @@ if ($o_mismatch_simple) {
 
 ## --focal-bounds option processing
 if ($o_focalbounds) {
+    die "--optimise may not be used with --focal-sites" if $o_optimise;
     ($o_focalbounds_up, $o_focalbounds_down) = split(/:/, $o_focalbounds, 2);
     $o_focalbounds_down = $o_focalbounds_up if not defined $o_focalbounds_down;
 }
@@ -288,10 +290,11 @@ sub create_mismatch($$$$);  # create mismatch sequences from degenerate sequence
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
 sub match_positions($$$);  # search for primer hits
+sub match_positions_focal($$$$);  # search for primer hits in focal regions
 sub match_positions_optimise($$$$$$$);  # search for head and tail of primer hits separately
 sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
-sub dump_amplicon_internal_hits($$$$);  # calculate and dump amplicons and internal hits
+sub dump_amplicon_internal_hits($$$);  # calculate and dump amplicons and internal hits
 
 sub iftag  { return $o_tag ? "$o_tag:"  : ""; }
 sub iftags { return $o_tag ? "$o_tag: " : " "; }
@@ -328,11 +331,23 @@ Potential amplicons longer than $o_maxmax bp are not tracked.
 };
 
 print STDERR qq{
+The search is optimised for increased speed by first searching for hits
+against the (presumably) lower-mismatch 3' tail section, and then only
+searching for hits against the (presumably) higher-mismatch 5' head section
+once a possible tail hit is found.  Note the 'presumably'; searches which
+allow for greater mismatches, either in the original degenerate sequence or
+when specified with --mismatch-simple, require more time.  If your mismatch
+profile does not fit the assumptions stated here, then --optimise might not
+be helpful.
+
+} if $o_optimise;
+
+print STDERR qq{
 The search is confined to focal sites as indicated by regions from the
 BED file '$o_focalsites_bed'.
 
-Upstream bounds from 5' end of regions:   $o_focalbounds_up bp
-Downstream bounds from 3' end of regions: $o_focalbounds_down bp
+Search boundary upstream from 5' end of regions:   $o_focalbounds_up bp
+Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
 
 } if $o_focalsites_bed;
 
@@ -403,21 +418,23 @@ if ($o_primerbed) {
 if ($o_internalseq) {
     $out_internalseq = Bio::SeqIO->new(-file => ">$o_internalseq", -format => 'fasta') or diefile($o_ref);
 }
+
 if ($o_internalbed) {
     open($out_internalbed, ">$o_internalbed") or diefile($o_ref);
 }
 
 if ($o_focalsites_bed) {
+    #
+    # Fill %focalsites hash with an array of sorted focal regions for each sequence
+    #
     my $fbed;
     open($fbed, "<$o_focalsites_bed") or diefile($o_focalsites_bed);
-    # read bed, create hash entries for each sequence
     while (<$fbed>) {
         chomp;
         my ($s, $l, $r, $x) = split(/\t/, $_, 4);
         $focalsites{$s} = () if not exists $focalsites{$s};
-        push @{$focalsites{$s}}, [ $l + 1, $r ];
+        push @{$focalsites{$s}}, [ $l, $r ];  # stick with BED coordinates
     }
-    # sort intervals within each sequence
     foreach my $k (sort keys %focalsites) {
         @{$focalsites{$k}} = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @{$focalsites{$k}};
     }
@@ -449,26 +466,26 @@ while (my $inseq = $in->next_seq()) {
         if ($o_optimise) {
             $f_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $forward{forwardheadquoted}, $forward{forwardtailquoted},
-                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "F");
+                $forward{headlen}, $forward{taillen}, 0, $inseq, "F");
             $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $reverse{revcompheadquoted}, $reverse{revcomptailquoted},
-                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "R");
+                $reverse{headlen}, $reverse{taillen}, 0, $inseq, "R");
             $r_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $reverse{forwardheadquoted}, $reverse{forwardtailquoted},
-                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "r");
+                $reverse{headlen}, $reverse{taillen}, 0, $inseq, "r");
             $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $forward{revcompheadquoted}, $forward{revcomptailquoted},
-                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "f");
+                $forward{headlen}, $forward{taillen}, 0, $inseq, "f");
             print STDERR "Matching F, R, r and f primers optimised with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
         } else {
             $f_forward_t = threads->create({'context' => 'list'},
-                \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+                \&match_positions, $forward{forwardquoted}, $inseq, "F");
             $r_revcomp_t = threads->create({'context' => 'list'},
-                \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+                \&match_positions, $reverse{revcompquoted}, $inseq, "R");
             $r_forward_t = threads->create({'context' => 'list'},
-                \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+                \&match_positions, $reverse{forwardquoted}, $inseq, "r");
             $f_revcomp_t = threads->create({'context' => 'list'},
-                \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+                \&match_positions, $forward{revcompquoted}, $inseq, "f");
             print STDERR "Matching F, R, r and f primers with threads $f_forward_t, $r_revcomp_t, $r_forward_t and $f_revcomp_t ...\n";# if $o_verbose;
         }
 
@@ -484,16 +501,16 @@ while (my $inseq = $in->next_seq()) {
         if ($o_optimise) {
             $f_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $forward{forwardheadquoted}, $forward{forwardtailquoted},
-                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "F");
+                $forward{headlen}, $forward{taillen}, 0, $inseq, "F");
             $r_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $reverse{revcompheadquoted}, $reverse{revcomptailquoted},
-                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "R");
+                $reverse{headlen}, $reverse{taillen}, 0, $inseq, "R");
             print STDERR "Matching F and R primers optimised with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
         } else {
             $f_forward_t = threads->create({'context' => 'list'},
-                \&match_positions, $forward{forwardquoted}, \$this_sequence, "F");
+                \&match_positions, $forward{forwardquoted}, $inseq, "F");
             $r_revcomp_t = threads->create({'context' => 'list'},
-                \&match_positions, $reverse{revcompquoted}, \$this_sequence, "R");
+                \&match_positions, $reverse{revcompquoted}, $inseq, "R");
             print STDERR "Matching F and R primers with thread $f_forward_t and $r_revcomp_t ...\n";# if $o_verbose;
         }
 
@@ -503,16 +520,16 @@ while (my $inseq = $in->next_seq()) {
         if ($o_optimise) {
             $r_forward_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $reverse{forwardheadquoted}, $reverse{forwardtailquoted},
-                $reverse{headlen}, $reverse{taillen}, 0, \$this_sequence, "r");
+                $reverse{headlen}, $reverse{taillen}, 0, $inseq, "r");
             $f_revcomp_t = threads->create({'context' => 'list'}, \&match_positions_optimise,
                 $forward{revcompheadquoted}, $forward{revcomptailquoted},
-                $forward{headlen}, $forward{taillen}, 0, \$this_sequence, "f");
+                $forward{headlen}, $forward{taillen}, 0, $inseq, "f");
             print STDERR "Matching r and f primers optimised with thread $r_forward_t and $f_revcomp_t ...\n"; # if $o_verbose;
         } else {
             $r_forward_t = threads->create({'context' => 'list'},
-                \&match_positions, $reverse{forwardquoted}, \$this_sequence, "r");
+                \&match_positions, $reverse{forwardquoted}, $inseq, "r");
             $f_revcomp_t = threads->create({'context' => 'list'},
-                \&match_positions, $forward{revcompquoted}, \$this_sequence, "f");
+                \&match_positions, $forward{revcompquoted}, $inseq, "f");
             print STDERR "Matching r and f primers with thread $r_forward_t and $f_revcomp_t ...\n"; # if $o_verbose;
         }
 
@@ -527,32 +544,32 @@ while (my $inseq = $in->next_seq()) {
 
             @f_forward_hits = match_positions_optimise($forward{forwardheadquoted},
                 $forward{forwardtailquoted}, $forward{headlen}, $forward{taillen}, 0,
-                \$this_sequence, "F");
+                $inseq, "F");
             #print STDERR "$this_seqname:".iftag()." f forward hits ".scalar(@f_forward_hits)."\n"; print STDERR Dumper(\@f_forward_hits);
             @r_revcomp_hits = match_positions_optimise($reverse{revcompheadquoted},
                 $reverse{revcomptailquoted}, $reverse{headlen}, $reverse{taillen}, 1,
-                \$this_sequence, "R");
+                $inseq, "R");
             #print STDERR "$this_seqname:".iftag()." r revcomp hits ".scalar(@r_revcomp_hits)."\n"; print STDERR Dumper(\@r_revcomp_hits);
             @r_forward_hits = match_positions_optimise($reverse{forwardheadquoted},
                 $reverse{forwardtailquoted}, $reverse{headlen}, $reverse{taillen}, 0,
-                \$this_sequence, "r");
+                $inseq, "r");
             #print STDERR "$this_seqname:".iftag()." r forward hits ".scalar(@r_forward_hits)."\n"; print STDERR Dumper(\@r_forward_hits);
             @f_revcomp_hits = match_positions_optimise($forward{revcompheadquoted},
                 $forward{revcomptailquoted}, $forward{headlen}, $forward{taillen}, 1,
-                \$this_sequence, "f");
+                $inseq, "f");
             #print STDERR "$this_seqname:".iftag()." f revcomp hits ".scalar(@f_revcomp_hits)."\n"; print STDERR Dumper(\@f_revcomp_hits);
 
         } else {
 
             print STDERR "Matching F, R, r and f primers sequentially ...\n"; # if $o_verbose;
 
-            @f_forward_hits = match_positions($forward{forwardquoted}, \$this_sequence, "F");
+            @f_forward_hits = match_positions($forward{forwardquoted}, $inseq, "F");
             #print STDERR "$this_seqname:".iftag()." f forward hits ".scalar(@f_forward_hits)."\n"; print STDERR Dumper(\@f_forward_hits);
-            @r_revcomp_hits = match_positions($reverse{revcompquoted}, \$this_sequence, "R");
+            @r_revcomp_hits = match_positions($reverse{revcompquoted}, $inseq, "R");
             #print STDERR "$this_seqname:".iftag()." r revcomp hits ".scalar(@r_revcomp_hits)."\n"; print STDERR Dumper(\@r_revcomp_hits);
-            @r_forward_hits = match_positions($reverse{forwardquoted}, \$this_sequence, "r");
+            @r_forward_hits = match_positions($reverse{forwardquoted}, $inseq, "r");
             #print STDERR "$this_seqname:".iftag()." r forward hits ".scalar(@r_forward_hits)."\n"; print STDERR Dumper(\@r_forward_hits);
-            @f_revcomp_hits = match_positions($forward{revcompquoted}, \$this_sequence, "f");
+            @f_revcomp_hits = match_positions($forward{revcompquoted}, $inseq, "f");
             #print STDERR "$this_seqname:".iftag()." f revcomp hits ".scalar(@f_revcomp_hits)."\n"; print STDERR Dumper(\@f_revcomp_hits);
         }
 
@@ -575,9 +592,9 @@ while (my $inseq = $in->next_seq()) {
                  " forward hits ".scalar(@forward_hits)." ($n_forward_dups dups),".
                  " revcomp hits ".scalar(@revcomp_hits)." ($n_revcomp_dups dups)\n";
 
-    dump_primer_hits($this_seqname, \@forward_hits, \@revcomp_hits);
+    dump_primer_hits($inseq, \@forward_hits, \@revcomp_hits);
 
-    dump_amplicon_internal_hits($this_seqname, \$this_sequence, \@forward_hits, \@revcomp_hits);
+    dump_amplicon_internal_hits($inseq, \@forward_hits, \@revcomp_hits);
 
 }
 
@@ -893,16 +910,56 @@ sub count_degen($) {
 # hit.  The interval is [beg, end), the same as a BED interval, and each
 # anonymous array contains
 #
-# [ $beg, $end, $hit_sequence ]
+# [ $beg, $end, $hit_sequence, $id ]
 #
 sub match_positions($$$) {
-    my ($pat, $seq, $id) = @_;
+    my ($pat, $bioseq, $id) = @_;
+    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
     my @ans;
-    while ($$seq =~ /$pat/aaig) {
+    while ($seq =~ /$pat/aaig) {
         my ($beg, $end) = ($-[0], $+[0]);
-        my $hit = substr($$seq, $beg, $end - $beg);
+        my $hit = substr($seq, $beg, $end - $beg);
         print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_verbose;
         push @ans, [ $beg, $end, $hit, $id ];
+    }
+    return @ans;
+}
+
+
+
+# Passed in a pattern quoted with 'qr/.../aai', a Bio::Seq object containing a
+# sequence to search, a list of sites to focus on, L-R boundaries in BED
+# coordinates, and an ID to mark each hit.  Returns an array of anonymous
+# arrays containing the 0-based beginning and end of the hit and the sequence
+# of the hit.  The interval is [beg, end), the same as a BED interval, and each
+# anonymous array contains
+#
+# [ $beg, $end, $hit_sequence, $focalid ]
+#
+# where $focalid is formed from the $id value passed in as the 4th argument,
+# plus the coordinates of the focal site for which this hit was found.
+#
+sub match_positions_focal($$$$) {
+    my ($pat, $bioseq, $sites, $id) = @_;
+    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
+    # we also use $o_focalbounds_up and $o_focalbounds_down
+    my @ans;
+    foreach my $site (@$sites) {
+        my $left = $site->[0] - $o_focalbounds_up;
+        my $right = $site->[1] + $o_focalbounds_down;
+        my $focalid = "$id:".$site->[0]."($left)-".$site->[1]."($right)";
+        if ($left >= $right - 1) {
+            print STDERR "match_positions_focal: '$seqname' interval unsearchable, $focalid\n";# if $o_verbose;
+            next;
+        }
+        my $focalseq = substr($seq, $left, $right - $left);
+        while ($focalseq =~ /$pat/aaig) {
+            my ($beg, $end) = ($-[0], $+[0]);
+            my $hit = substr($focalseq, $beg, $end - $beg);
+            $beg += $left; $end += $left;
+            print STDERR "match_positions_focal: $focalid   $beg-$end   $hit\n" if $o_verbose;
+            push @ans, [ $beg, $end, $hit, $focalid ];
+        }
     }
     return @ans;
 }
@@ -925,13 +982,14 @@ sub match_positions($$$) {
 #
 
 sub match_positions_optimise($$$$$$$) {
-    my ($headpat, $tailpat, $headlen, $taillen, $is_rc, $seq, $id) = @_;
+    my ($headpat, $tailpat, $headlen, $taillen, $is_rc, $bioseq, $id) = @_;
     my @ans;
     my ($head_hits, $tail_hits) = (0, 0);
-    while ($$seq =~ /$tailpat/aaig) {
+    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
+    while ($seq =~ /$tailpat/aaig) {
         my ($tailbeg, $tailend) = ($-[0], $+[0]);
         ++$tail_hits;
-        my $tail = substr($$seq, $tailbeg, $tailend - $tailbeg);
+        my $tail = substr($seq, $tailbeg, $tailend - $tailbeg);
         #print STDERR "match_positions_optimise: $id  tail#$tail_hits  $tailbeg-$tailend   $tail\n";# if $o_verbose;
         my ($headbeg, $headend);
         if ($is_rc) {
@@ -941,7 +999,7 @@ sub match_positions_optimise($$$$$$$) {
             $headend = $tailbeg;
             $headbeg = $headend - $headlen;
         }
-        my $head = substr($$seq, $headbeg, $headend - $headbeg);
+        my $head = substr($seq, $headbeg, $headend - $headbeg);
         #print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $head\n";# if $o_verbose;
         #print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $headpat\n";# if $o_verbose;
         if ($head =~ /$headpat/aai) {
@@ -985,7 +1043,8 @@ sub remove_duplicate_intervals($) {
 # produce BED and/or Fasta files.
 #
 sub dump_primer_hits($$$) {
-    my ($seqname, $forward_hits, $revcomp_hits) = @_;
+    my ($bioseq, $forward_hits, $revcomp_hits) = @_;
+    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
 
     my @all_hits = sort { $a->[0] <=> $b->[0] } ( @$forward_hits, @$revcomp_hits );
     my $n_all_dups = remove_duplicate_intervals(\@all_hits);
@@ -1021,8 +1080,9 @@ sub dump_primer_hits($$$) {
 # amplicons, sort into too-short, too-long, and just-right lengths, count them
 # up, and produce BED and/or Fasta files for amplicons and/or internal regions.
 #
-sub dump_amplicon_internal_hits($$$$) {
-    my ($seqname, $sequence, $forward_hits, $revcomp_hits) = @_;
+sub dump_amplicon_internal_hits($$$) {
+    my ($bioseq, $forward_hits, $revcomp_hits) = @_;
+    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
     # amplicons extend between forward_hits->[0] and revcomp_hits->[1]
     # internal regions extend between forward_hits->[1] and revcomp_hits->[0]
     my @amp_short; # too short  0 <=      < $o_min
@@ -1036,8 +1096,8 @@ sub dump_amplicon_internal_hits($$$$) {
             my ($intbeg, $intend) = ( $f->[1], $r->[0] );
             my $amp_len = $end - $beg;
             next if $amp_len < 0 or $amp_len > $o_maxmax;
-            my $amplicon = substr($$sequence, $beg, $end - $beg);
-            my $internal = substr($$sequence, $intbeg, $intend - $intbeg);
+            my $amplicon = substr($seq, $beg, $end - $beg);
+            my $internal = substr($seq, $intbeg, $intend - $intbeg);
             # this uses more storage than necessary but it may not matter
             my $arr = [ $beg, $end, $amplicon, $primers_id, $intbeg, $intend, $internal ];
             if ($amp_len < $o_min) {
