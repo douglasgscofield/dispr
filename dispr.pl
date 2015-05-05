@@ -57,6 +57,8 @@ my $o_expand_dot = 0;
 my $o_no_trunc = 0;
 my $o_optimise = 0;
 my $o_verbose;
+my $o_debug_optimise = 1;
+my $o_debug_focal = 1;
 my $o_help;
 my $o_threads = 0;# 4;
 my $o_threads_max = 4;
@@ -399,6 +401,7 @@ my ($in,
     $out_primerseq, $out_primerbed,
     $out_internalseq, $out_internalbed);
 my %focalsites;
+my $n_focalsites;
 
 sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
@@ -425,19 +428,32 @@ if ($o_internalbed) {
 
 if ($o_focalsites) {
     #
-    # Fill %focalsites hash with an array of sorted focal regions for each sequence
+    # Fill %focalsites hash with an array of sorted valid focal regions for each sequence
     #
     my $fbed;
     open($fbed, "<$o_focalsites") or diefile($o_focalsites);
     while (<$fbed>) {
         chomp;
         my ($s, $l, $r, $x) = split(/\t/, $_, 4);
+        if ($l < 0 or $r < 0 or $l >= $r) {
+            print STDERR "invalid bed interval: $s\t$l\t$r, skipping";
+            next;
+        }
+        # check realised bounds of interval
+        my ($left, $right) = ( $l - $o_focalbounds_up, $r + $o_focalbounds_down );
+        if ($left >= $right - 1) {
+            print STDERR "focal site '$s $l $r' unsearchable after applying bounds [$left, $right), skipping\n";
+            next;
+        }
         $focalsites{$s} = () if not exists $focalsites{$s};
         push @{$focalsites{$s}}, [ $l, $r ];  # stick with BED coordinates
+        ++$n_focalsites;
     }
+    die "no valid focal sites identified" if ! %focalsites;
     foreach my $k (sort keys %focalsites) {
         @{$focalsites{$k}} = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @{$focalsites{$k}};
     }
+    print STDERR "$n_focalsites focal sites to be searched on ".scalar(keys(%focalsites))." separate sequences\n";
 }
 
 my $Un;
@@ -948,17 +964,15 @@ sub match_positions_focal($$$$) {
     foreach my $site (@$sites) {
         my $left = $site->[0] - $o_focalbounds_up;
         my $right = $site->[1] + $o_focalbounds_down;
+        # already checked for validity when loading %focalsites hash
         my $focalid = "$id:".$site->[0]."($left)-".$site->[1]."($right)";
-        if ($left >= $right - 1) {
-            print STDERR "match_positions_focal: '$seqname' interval unsearchable, $focalid\n";# if $o_verbose;
-            next;
-        }
         my $focalseq = substr($seq, $left, $right - $left);
+        print STDERR "match_positions_focal: focal site extracted: $focalid\n" if $o_debug_focal;
         while ($focalseq =~ /$pat/aaig) {
             my ($beg, $end) = ($-[0], $+[0]);
             my $hit = substr($focalseq, $beg, $end - $beg);
             $beg += $left; $end += $left;
-            print STDERR "match_positions_focal: $focalid   $beg-$end   $hit\n" if $o_verbose;
+            print STDERR "match_positions_focal: focal hit identified: $focalid  $beg-$end  $hit\n" if $o_debug_focal;
             push @ans, [ $beg, $end, $hit, $focalid ];
         }
     }
@@ -990,7 +1004,7 @@ sub match_positions_optimise($$$$$$$) {
         my ($tailbeg, $tailend) = ($-[0], $+[0]);
         ++$tail_hits;
         my $tail = substr($seq, $tailbeg, $tailend - $tailbeg);
-        #print STDERR "match_positions_optimise: $id  tail#$tail_hits  $tailbeg-$tailend   $tail\n";# if $o_verbose;
+        print STDERR "match_positions_optimise: $id  tail#$tail_hits  $tailbeg-$tailend   $tail\n" if $o_debug_optimise;
         my ($headbeg, $headend);
         if ($is_rc) {
             $headbeg = $tailend;
@@ -1000,10 +1014,10 @@ sub match_positions_optimise($$$$$$$) {
             $headbeg = $headend - $headlen;
         }
         my $head = substr($seq, $headbeg, $headend - $headbeg);
-        #print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $head\n";# if $o_verbose;
-        #print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $headpat\n";# if $o_verbose;
+        print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $head\n" if $o_debug_optimise;
+        print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $headpat\n" if $o_debug_optimise;
         if ($head =~ /$headpat/aai) {
-            #print STDERR "match_positions_optimise:   $headpat  matches  $head\n";# if $o_verbose;
+            print STDERR "match_positions_optimise:   $headpat  matches  $head\n" if $o_debug_optimise;
             ++$head_hits;
             my ($beg, $end, $hit);
             if ($is_rc) {
@@ -1017,7 +1031,7 @@ sub match_positions_optimise($$$$$$$) {
             }
             push @ans, [ $beg, $end, $hit, $id ];
         } else {
-            #print STDERR "match_positions_optimise:   $headpat  does no match  $head\n";# if $o_verbose;
+            print STDERR "match_positions_optimise:   $headpat  does no match  $head\n" if $o_debug_optimise;
         }
     }
     return @ans;
