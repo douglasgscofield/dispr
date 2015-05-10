@@ -359,10 +359,13 @@ be helpful.
 
 } if $o_optimise;
 
+sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
+
 my %focalsites;
 my $n_focalsites;
 
 if ($o_focalsites) {
+
     print STDERR qq{
 The search is confined to focal sites as indicated by regions from the
 BED file '$o_focalsites'.
@@ -376,6 +379,7 @@ Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
     # Fill %focalsites hash with an array of sorted valid focal regions for each sequence
     #
     my $fbed;
+    my $flen = 0;
     open($fbed, "<$o_focalsites") or diefile($o_focalsites);
     while (<$fbed>) {
         chomp;
@@ -391,6 +395,7 @@ Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
             next;
         }
         $focalsites{$s} = () if not exists $focalsites{$s};
+        $flen += $r - $l;
         push @{$focalsites{$s}}, [ $l, $r ];  # stick with BED coordinates
         ++$n_focalsites;
     }
@@ -398,7 +403,7 @@ Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
     foreach my $k (sort keys %focalsites) {
         @{$focalsites{$k}} = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @{$focalsites{$k}};
     }
-    print STDERR "\n$n_focalsites focal sites to be searched on ".scalar(keys(%focalsites))." separate sequences\n\n";
+    print STDERR "$n_focalsites focal sites to be searched totalling $flen bp (without extended bounds) on ".scalar(keys(%focalsites))." separate sequences\n\n";
 }
 
 
@@ -446,8 +451,6 @@ my ($in,
     $out_seq, $out_bed,
     $out_primerseq, $out_primerbed,
     $out_internalseq, $out_internalbed);
-
-sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
 $in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or diefile($o_ref);
 
@@ -586,9 +589,16 @@ while (my $inseq = $in->next_seq()) {
 
         } elsif ($o_focalsites) {
 
-            print STDERR "No focal sites on sequence $this_seqname" if not exists $focalsites{$this_seqname};
+            if (not exists $focalsites{$this_seqname} and $this_seqname !~ /^chrUn/) {
+                print STDERR "No focal sites on sequence $this_seqname\n";
+                next;
+            } else {
+                if ($this_seqname !~ /^chrUn/) {
+                    print STDERR scalar(@{$focalsites{$this_seqname}})." focal sites on sequence $this_seqname\n";
+                }
+            }
 
-            print STDERR "Matching F, R, r and f primers near focal sites ...\n"; # if $o_verbose;
+            print STDERR "Matching F, R, r and f primers near focal sites ...\n" if $o_verbose;
             @f_forward_hits = match_positions_focal($forward{forwardquoted}, $inseq,
                                                     $focalsites{$this_seqname}, "F");
             @r_revcomp_hits = match_positions_focal($reverse{revcompquoted}, $inseq,
@@ -980,8 +990,12 @@ sub match_positions_focal($$$$) {
     foreach my $site (@$sites) {
         my $left = $site->[0] - $o_focalbounds_up;
         my $right = $site->[1] + $o_focalbounds_down;
+        $left = 0 if $left < 0;
+        $right = $bioseq->length() if $right > $bioseq->length();
+        my $leftoff = sprintf("%+d", $left - $site->[0]);
+        my $rightoff = sprintf("%+d", $right - $site->[1]);
         # already checked for validity when loading %focalsites hash
-        my $focalid = "$id:".$site->[0]."($left)-".$site->[1]."($right)";
+        my $focalid = "$id:".$site->[0]."($leftoff)-".$site->[1]."($rightoff)";
         my $focalseq = substr($seq, $left, $right - $left);
         print STDERR "match_positions_focal: focal site extracted: $focalid\n" if $o_debug_focal;
         while ($focalseq =~ /$pat/aaig) {
