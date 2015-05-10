@@ -14,6 +14,26 @@ A small number of mismatches can be allowed within the primer.  The number of co
 
 The `re::engine::RE2` regular expression drop-in module is used as it is much faster than Perl's implementation for the types of patterns matched here.
 
+
+
+Options
+-------
+
+Full help is available with `dispr.pl --help`.  Some options of note:
+
+`--mismatch-simple INT1:INT2[:INT3]`
+: Allow for *INT1* mismatches in the 5'-most *INT2* bases ("head") of each primer, with optionally *INT3* mismatches in the remaining 3' portion ("tail") of the primer
+
+`--optimise`
+: Try to speed up searches with `--mismatch-simple` by searching for matches against the (presumably less-complex) tail portion of each primer first, and only then looking for a match against the adjacent primer head
+
+`--focal-sites BED`
+: Confine primer searches to regions of the reference genome described in the BED-format file.  The option `--focal-bounds` allows the specification of a further region up- and downstream of each BED interval that is included in the search (default &plusmn;1000 bp)
+
+`--threads N`
+: Execute *N* (2 or 4) primer searches in parallel
+
+
 License
 -------
 Gnu Public License v2
