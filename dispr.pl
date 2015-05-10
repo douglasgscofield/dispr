@@ -87,7 +87,7 @@ Primer and search parameters:
     --both                   --forward              --reverse
     --tag TAG
     --mismatch-simple INT1:INT2[:INT3]              --skip-count
-    --focal-bed BED          --focal-bounds INT1[:INT2]
+    --focal-sites BED        --focal-bounds INT1[:INT2]
 
 Amplicons:
     --multiplex              --no-multiplex
@@ -168,7 +168,7 @@ Primer and search parameters:
                           integers.  If INT2 is not provided, its value is
                           taken from INT1.  Positive values extend the region
                           up- and downstream, while negative values restrict
-                          it.  [defaults $o_focalbounds_up : $o_focalbounds_down]
+                          it.  [defaults $o_focalbounds_up:$o_focalbounds_down]
 
 Amplicons:
 
@@ -240,7 +240,7 @@ GetOptions("pf=s"              => \@o_pf,
            "ref=s"             => \$o_ref,
            "bed=s"             => \$o_bed,
            "seq=s"             => \$o_seq,
-           "optimi[sz]e"       => \$o_optimise,
+           "optimise|optimize" => \$o_optimise,
            "threads=i"         => \$o_threads,
            "expand-dot"        => \$o_expand_dot,
            "no-trunc"          => \$o_no_trunc,
