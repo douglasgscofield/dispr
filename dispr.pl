@@ -359,14 +359,48 @@ be helpful.
 
 } if $o_optimise;
 
-print STDERR qq{
+my %focalsites;
+my $n_focalsites;
+
+if ($o_focalsites) {
+    print STDERR qq{
 The search is confined to focal sites as indicated by regions from the
 BED file '$o_focalsites'.
 
 Search boundary upstream from 5' end of regions:   $o_focalbounds_up bp
 Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
 
-} if $o_focalsites;
+};
+
+    #
+    # Fill %focalsites hash with an array of sorted valid focal regions for each sequence
+    #
+    my $fbed;
+    open($fbed, "<$o_focalsites") or diefile($o_focalsites);
+    while (<$fbed>) {
+        chomp;
+        my ($s, $l, $r, $x) = split(/\t/, $_, 4);
+        if ($l < 0 or $r < 0 or $l >= $r) {
+            print STDERR "invalid bed interval: $s\t$l\t$r, skipping";
+            next;
+        }
+        # check realised bounds of interval
+        my ($left, $right) = ( $l - $o_focalbounds_up, $r + $o_focalbounds_down );
+        if ($left >= $right - 1) {
+            print STDERR "focal site '$s $l $r' unsearchable after applying bounds [$left, $right), skipping\n";
+            next;
+        }
+        $focalsites{$s} = () if not exists $focalsites{$s};
+        push @{$focalsites{$s}}, [ $l, $r ];  # stick with BED coordinates
+        ++$n_focalsites;
+    }
+    die "no valid focal sites identified" if ! %focalsites;
+    foreach my $k (sort keys %focalsites) {
+        @{$focalsites{$k}} = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @{$focalsites{$k}};
+    }
+    print STDERR "\n$n_focalsites focal sites to be searched on ".scalar(keys(%focalsites))." separate sequences\n\n";
+}
+
 
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
 
@@ -412,8 +446,6 @@ my ($in,
     $out_seq, $out_bed,
     $out_primerseq, $out_primerbed,
     $out_internalseq, $out_internalbed);
-my %focalsites;
-my $n_focalsites;
 
 sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
@@ -436,36 +468,6 @@ if ($o_internalseq) {
 }
 if ($o_internalbed) {
     open($out_internalbed, ">$o_internalbed") or diefile($o_ref);
-}
-
-if ($o_focalsites) {
-    #
-    # Fill %focalsites hash with an array of sorted valid focal regions for each sequence
-    #
-    my $fbed;
-    open($fbed, "<$o_focalsites") or diefile($o_focalsites);
-    while (<$fbed>) {
-        chomp;
-        my ($s, $l, $r, $x) = split(/\t/, $_, 4);
-        if ($l < 0 or $r < 0 or $l >= $r) {
-            print STDERR "invalid bed interval: $s\t$l\t$r, skipping";
-            next;
-        }
-        # check realised bounds of interval
-        my ($left, $right) = ( $l - $o_focalbounds_up, $r + $o_focalbounds_down );
-        if ($left >= $right - 1) {
-            print STDERR "focal site '$s $l $r' unsearchable after applying bounds [$left, $right), skipping\n";
-            next;
-        }
-        $focalsites{$s} = () if not exists $focalsites{$s};
-        push @{$focalsites{$s}}, [ $l, $r ];  # stick with BED coordinates
-        ++$n_focalsites;
-    }
-    die "no valid focal sites identified" if ! %focalsites;
-    foreach my $k (sort keys %focalsites) {
-        @{$focalsites{$k}} = sort { $a->[0] <=> $b->[0] || $a->[1] <=> $b->[1] } @{$focalsites{$k}};
-    }
-    print STDERR "$n_focalsites focal sites to be searched on ".scalar(keys(%focalsites))." separate sequences\n";
 }
 
 my $Un;
@@ -583,6 +585,8 @@ while (my $inseq = $in->next_seq()) {
                 $inseq, "f");
 
         } elsif ($o_focalsites) {
+
+            print STDERR "No focal sites on sequence $this_seqname" if not exists $focalsites{$this_seqname};
 
             print STDERR "Matching F, R, r and f primers near focal sites ...\n"; # if $o_verbose;
             @f_forward_hits = match_positions_focal($forward{forwardquoted}, $inseq,
