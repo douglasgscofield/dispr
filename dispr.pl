@@ -70,6 +70,7 @@ my $o_mm_int2;  # length of 5' sequence to apply mismatches
 my $o_mm_int2_max = 10;
 my $o_mm_int3;  # number of mismatches in remainder of primer
 my $o_mm_int3_max = 2;
+my $o_showmismatches = 0;
 my $o_skip_count = 0;
 
 
@@ -87,6 +88,7 @@ Primer and search parameters:
     --both                   --forward              --reverse
     --tag TAG
     --mismatch-simple INT1:INT2[:INT3]              --skip-count
+    --show-mismatches
     --focal-sites BED        --focal-bounds INT1[:INT2]
 
 Amplicons:
@@ -153,6 +155,15 @@ Primer and search parameters:
                           To allow up to 2 mismatches in the 5'-most 5 bp, 
                           with no mismatches in the remainder:
                           --mismatch-simple 2:5  OR  --mismatch-simple 2:5:0
+    --show-mismatches     Include information on the number of mismatches for
+                          each primer hit.  A mismatch is counted if it is
+                          not matched by one possible base expressed in the
+                          original degenerate sequence.  Information is
+                          encoded in the form
+                              mismatches:total-count:0001000101011
+                          where total-count is the total number of mismatches
+                          and 0001000 is a position-by-position indication
+                          of whether a mismatch occurred at that position.
     --skip-count          Skip the counting-concrete-primers step of 
                           --mismatch-simple, which can consume a surprising
                           amount of time and memory ing if INT1 and/or INT2
@@ -225,6 +236,7 @@ GetOptions("pf=s"              => \@o_pf,
            "forward"           => sub { $o_dir = "forward" },
            "reverse"           => sub { $o_dir = "reverse" },
            "mismatch-simple=s" => \$o_mismatch_simple,
+           "show-mismatches"   => \$o_showmismatches,
            "skip-count"        => \$o_skip_count,
            "focal-sites=s"     => \$o_focalsites,
            "focal-bounds=s"    => \$o_focalbounds,
