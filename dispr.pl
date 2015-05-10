@@ -586,13 +586,13 @@ while (my $inseq = $in->next_seq()) {
 
             print STDERR "Matching F, R, r and f primers near focal sites ...\n"; # if $o_verbose;
             @f_forward_hits = match_positions_focal($forward{forwardquoted}, $inseq,
-                                                    \$focalsites{$this_seqname}, "F");
+                                                    $focalsites{$this_seqname}, "F");
             @r_revcomp_hits = match_positions_focal($reverse{revcompquoted}, $inseq,
-                                                    \$focalsites{$this_seqname}, "R");
+                                                    $focalsites{$this_seqname}, "R");
             @r_forward_hits = match_positions_focal($reverse{forwardquoted}, $inseq,
-                                                    \$focalsites{$this_seqname}, "r");
+                                                    $focalsites{$this_seqname}, "r");
             @f_revcomp_hits = match_positions_focal($forward{revcompquoted}, $inseq,
-                                                    \$focalsites{$this_seqname}, "f");
+                                                    $focalsites{$this_seqname}, "f");
 
         } else {
 
