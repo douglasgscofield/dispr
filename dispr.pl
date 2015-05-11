@@ -160,10 +160,11 @@ Primer and search parameters:
                           not matched by one possible base expressed in the
                           original degenerate sequence.  Information is
                           encoded in the form
-                              mismatches:total-count:0001000101011
+                              mism:total-count:0001000101011
                           where total-count is the total number of mismatches
-                          and 0001000 is a position-by-position indication
+                          and 0001000101011 is a position-by-position indication
                           of whether a mismatch occurred at that position.
+
     --skip-count          Skip the counting-concrete-primers step of 
                           --mismatch-simple, which can consume a surprising
                           amount of time and memory ing if INT1 and/or INT2
@@ -306,6 +307,7 @@ sub prepare_primer($);  # prepare primer for searches
 sub create_mismatch($$$$);  # create mismatch sequences from degenerate sequence
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
+sub count_mismatches($$);  # count the number of mismatches in $2 (with IUPAC) vs. $1
 sub match_positions($$$);  # search for primer hits
 sub match_positions_focal($$$$);  # search for primer hits in focal regions
 sub match_positions_optimise($$$$$$$);  # search for head and tail of primer hits separately
@@ -943,6 +945,19 @@ sub count_degen($) {
     my $count = scalar keys %h;
     print STDERR "count_degen: Completed counting $n degen sequences: $u unrolled and $count unique concrete sequences\n";# if $o_verbose;
     return $count;
+}
+
+
+
+# Count the number of mismatches
+#
+sub count_mismatches($$){
+    my ($pat, $seq) = @_;
+    # should pass higher-level object... the complete hash for the pattern would be a start
+    # 
+    # $hash{iupac} if mismatches are not to be searched for
+    # $hash{iupac0} if there are mismatches
+    # Move along
 }
 
 
