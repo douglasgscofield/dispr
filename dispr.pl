@@ -160,10 +160,12 @@ Primer and search parameters:
                           not matched by one possible base expressed in the
                           original degenerate sequence.  Information is
                           encoded in the form
-                              mism:total-count:0001000101011
-                          where total-count is the total number of mismatches
+                              mism:5:0001000101011
+                          where 5 is the total number of mismatches
                           and 0001000101011 is a position-by-position indication
-                          of whether a mismatch occurred at that position.
+                          of whether a mismatch occurred at that position.  If
+                          there are no mismatches identified for the primer hit,
+                          then the string is 'mism:0:0'.
 
     --skip-count          Skip the counting-concrete-primers step of 
                           --mismatch-simple, which can consume a surprising
@@ -281,6 +283,24 @@ if ($o_mismatch_simple) {
     die "must span 1 to $o_mm_int2_max 5' bases" if $o_mm_int2 < 1 or $o_mm_int2 > $o_mm_int2_max;
     die "must allow 0 to $o_mm_int3_max mismatches in remainder" if $o_mm_int3 < 0 or $o_mm_int3 > $o_mm_int3_max;
     print STDERR "Counting concrete primers may take a long time, consider --skip-count\n" if not $o_skip_count and $o_mm_int1 >= 4 and $o_mm_int2 >= 8;
+
+} elsif ($o_showmismatches) {
+
+    print STDERR "\nNOTE: --show-mismatches makes no sense without --mismatch-simple, unsetting\n";
+    $o_showmismatches = 0;
+}
+
+# For --show-mismatches, create hash of hashes for each base code, for
+# existence checks
+#
+my %iub = Bio::Tools::IUPAC->new->iupac_iub;
+my %iupac;
+foreach my $k (sort keys %iub) {
+    foreach my $b (@{$iub{$k}}) {
+        $k = uc($k);
+        $b = uc($b);
+        $iupac{$k}{$b}++;
+    }
 }
 
 ## --focal-bounds option processing
@@ -307,7 +327,7 @@ sub prepare_primer($);  # prepare primer for searches
 sub create_mismatch($$$$);  # create mismatch sequences from degenerate sequence
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
-sub count_mismatches($$);  # count the number of mismatches in $2 (with IUPAC) vs. $1
+sub show_mismatches($$);  # count the number of mismatches in each of $1 vs. $2
 sub match_positions($$$);  # search for primer hits
 sub match_positions_focal($$$$);  # search for primer hits in focal regions
 sub match_positions_optimise($$$$$$$);  # search for head and tail of primer hits separately
@@ -592,11 +612,11 @@ while (my $inseq = $in->next_seq()) {
         } elsif ($o_focalsites) {
 
             if (not exists $focalsites{$this_seqname} and $this_seqname !~ /^chrUn/) {
-                print STDERR "No focal sites on sequence $this_seqname\n";
+                print STDERR "No focal sites on --ref sequence $this_seqname\n";
                 next;
             } else {
                 if ($this_seqname !~ /^chrUn/) {
-                    print STDERR scalar(@{$focalsites{$this_seqname}})." focal sites on sequence $this_seqname\n";
+                    print STDERR scalar(@{$focalsites{$this_seqname}})." focal sites on --ref sequence $this_seqname\n";
                 }
             }
 
@@ -622,6 +642,15 @@ while (my $inseq = $in->next_seq()) {
     }
 
     # The remainder of the code in this loop is quick, no need for threads
+
+    if ($o_showmismatches) {
+        # Go through each set of hits, find mismatches vs. the original primer
+        # and add an extra field to each describing the mismatches.
+        show_mismatches(\@f_forward_hits, $forward{primer});
+        show_mismatches(\@r_revcomp_hits, $reverse{revprimer});
+        show_mismatches(\@r_forward_hits, $reverse{primer});
+        show_mismatches(\@f_revcomp_hits, $forward{revprimer});
+    }
 
     # Sort and remove duplicate hits that start at the same position.  So long
     # as the sort is stable, the order enforces the duplicate selection
@@ -684,7 +713,8 @@ sub expand_dot($) {
 #
 #     name            name of the primer (if supplied)
 #     dir             direction of the primer (if supplied)
-#     sequence        sequence of the primer as provided
+#     primer          sequence of the primer as provided
+#     revprimer       reverse-complement of the primer sequence
 #     Seq             Bio::Seq object for the primer
 #     SeqPattern      Bio::Tools::SeqPattern object for the primer
 #     forwardpattern  regex for the forward (given) orientation of the primer
@@ -708,10 +738,11 @@ sub prepare_primer($) {
         $dest{dir} = $p[1];
         $primer = $p[2];
     }
-    $dest{sequence} = $primer;
+    $dest{primer} = $primer;
     my $s = Bio::Seq->new(-seq => $primer, -alphabet => 'dna');
     $dest{Seq} = $s;
     my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
+    $dest{revprimer} = $seqpattern->revcom()->str();
     $dest{SeqPattern} = $seqpattern;
     if ($o_mismatch_simple) {
         my ($mmpat, $headpat, $tailpat, $mmcount) = apply_mismatch_simple(
@@ -951,13 +982,31 @@ sub count_degen($) {
 
 # Count the number of mismatches
 #
-sub count_mismatches($$){
-    my ($pat, $seq) = @_;
-    # should pass higher-level object... the complete hash for the pattern would be a start
-    # 
-    # $hash{iupac} if mismatches are not to be searched for
-    # $hash{iupac0} if there are mismatches
-    # Move along
+# $pat should be in the same orientation as the hits in @$hits, which are
+# always forward
+#
+sub show_mismatches($$) {
+    my ($hits, $pat) = @_;
+    # each member of @$hits comes in as [ $beg, $end, $hit, $id ]
+    my @pchar = map { uc } split //, $pat;
+    #foreach my $h (@$hits) {
+    foreach my $h (@{$hits}) {
+        my @hchar = map { uc } split //, $h->[2];
+        die "pattern and hit lengths don't match" if @pchar != @hchar;
+        my $n_mismatches = 0;
+        my $mismatch_string = "0" x @hchar;
+        foreach my $i (0..$#pchar) {
+            # If the character in the hit sequence is not part of the ambiguity
+            # of the same character in the pattern, then it is a mismatch.
+            if (not exists $iupac{$pchar[$i]}{$hchar[$i]}) {
+                ++$n_mismatches;
+                substr($mismatch_string, $i, 1) = "1";
+            }
+        }
+        # add mismatch message
+        $mismatch_string = "0" if $n_mismatches == 0;
+        push @{$h}, "mism:$n_mismatches:$mismatch_string";
+    }
 }
 
 
@@ -1118,6 +1167,7 @@ sub dump_primer_hits($$$) {
         if ($o_primerbed) {
             my $name = "$id:$hit";  # the hit sequence itself
             $name = "$o_tag:$name" if $o_tag;
+            $name .= "," . $h->[4] if $o_showmismatches;
             $out_primerbed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_primerseq) {
@@ -1125,9 +1175,10 @@ sub dump_primer_hits($$$) {
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
             $name .= ":$o_tag" if $o_tag;
             $name .= ":$id";
+            $name .= "," . $h->[4] if $o_showmismatches;
             my $hitseq = Bio::Seq->new(-id => $name,
                                        -seq => $h->[2],
-                                       -alphabed => 'dna');
+                                       -alphabet => 'dna');
             $out_primerseq->write_seq($hitseq);
         }
     }
@@ -1159,6 +1210,7 @@ sub dump_amplicon_internal_hits($$$) {
             my $internal = substr($seq, $intbeg, $intend - $intbeg);
             # this uses more storage than necessary but it may not matter
             my $arr = [ $beg, $end, $amplicon, $primers_id, $intbeg, $intend, $internal ];
+            $arr->[7] = $f->[4] . "," . $r->[4] if $o_showmismatches;
             if ($amp_len < $o_min) {
                 push @amp_short, $arr;
             } elsif ($amp_len > $o_max) {
@@ -1181,22 +1233,26 @@ sub dump_amplicon_internal_hits($$$) {
     foreach my $h (@amp) {
         if ($o_bed) {
             my $name = "$o_tag:".$h->[3].":".length($h->[2]);
+            $name .= "," . $h->[7] if $o_showmismatches;
             $out_bed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_seq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$o_tag:".$h->[3].":".length($h->[2]);
+            $name .= "," . $h->[7] if $o_showmismatches;
             $out_seq->write_seq(Bio::Seq->new(-id => $name,
                                               -seq => $h->[2],
                                               -alphabet => 'dna'));
         }
         if ($o_internalbed) {
             my $name = "$o_tag:".$h->[3].":".length($h->[6]);
+            $name .= "," . $h->[7] if $o_showmismatches;
             $out_internalbed->print($seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n");
         }
         if ($o_internalseq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[4] + 1)."-".$h->[5].":$o_tag:".$h->[3].":".length($h->[6]);
+            $name .= "," . $h->[7] if $o_showmismatches;
             $out_internalseq->write_seq(Bio::Seq->new(-id => $name,
                                                       -seq => $h->[6],
                                                       -alphabet => 'dna'));

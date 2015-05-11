@@ -1,8 +1,8 @@
 TODO
 ----
 
+* Pass full primer hash to match routines?
 * Figure out why some hits are missing with `--optimise`
-* Can I figure out how many mismatches each hit required?  `--show-mismatches` or something like it
 * multiple primer pairs
 * primer pairs from Fasta file
 * fuzzy matching?
@@ -12,6 +12,7 @@ TODO
 DONE
 ----
 
+* Implemented `--show-mismatches` to count mismatches when `--mismatch-simple` is in effect
 * Searches can be limited to specific regions of the reference genome with the `--focal-sites` and `--focal-bounds` options
 * Found a way to nicely check for module availability (the whole `re::engine::RE2` issue), need to end the eval with 1: eval 'use re::engine::RE2; 1';
 * using re::engine::RE2 for much faster regex matching

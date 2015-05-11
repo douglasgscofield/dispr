@@ -24,6 +24,9 @@ Full help is available with `dispr.pl --help`.  Some options of note:
 `--mismatch-simple INT1:INT2[:INT3]`
 : Allow for *INT1* mismatches in the 5'-most *INT2* bases ("head") of each primer, with optionally *INT3* mismatches in the remaining 3' portion ("tail") of the primer
 
+`--show-mismatches`
+: Count the number of mismatches per primer hit when `--mismatch-simple` is in effect
+
 `--optimise`
 : Try to speed up searches with `--mismatch-simple` by searching for matches against the (presumably less-complex) tail portion of each primer first, and only then looking for a match against the adjacent primer head
 
