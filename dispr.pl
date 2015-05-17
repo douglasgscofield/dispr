@@ -4,8 +4,8 @@ use 5.18.4;  # needed for UPPMAX, this perl version compiled with threads
 
 my $with_threads = eval 'use threads qw(stringify); 1';
 
-# allocate 536870912 bytes for the DFA tables 1 << 29
-# allocate 1073741824 bytes for the DFA tables 1 << 30
+# Allocate 536870912 bytes for the DFA tables 1 << 29.
+# Trying 1 << 30 (1073741824 bytes) failed consistently.
 # 134217728 1<< 27
 my $with_RE2 = eval 'use re::engine::RE2 -max_mem => 1 << 29; 1';
 
@@ -42,7 +42,6 @@ my $o_orientation = "FR";
 my $o_min = 1;
 my $o_max = 2000;
 my $o_maxmax = 10000;
-my $o_dir = "both";
 my $o_focalsites;
 my $o_focalbounds;
 my ($o_focalbounds_up, $o_focalbounds_down) = (1000, 1000);
@@ -142,7 +141,7 @@ Primer and search parameters:
     --primers FILE        File containing primer pair(s), as forward/reverse
                           (CURRENTLY UNSUPPORTED)
     --tag TAG             String added as tag to output (REQUIRED)
-    --orientation FR      Orientation of primers, only FR supported for now
+    --orientation FR      Orientation of primers as given, only FR supported
     --both                Orientation of the reference sequence to search
     --forward             CURRENTLY ONLY --both IS SUPPORTED
     --reverse
@@ -160,18 +159,19 @@ Primer and search parameters:
                           not matched by one possible base expressed in the
                           original degenerate sequence.  Information is
                           encoded in the form
-                              mism:5:0001000101011
-                          where 5 is the total number of mismatches
-                          and 0001000101011 is a position-by-position indication
+                              mism:4:1011000001000
+                          where 4 is the total number of mismatches
+                          and 1011000001000 is a position-by-position indication
                           of whether a mismatch occurred at that position.  If
                           there are no mismatches identified for the primer hit,
                           then the string is 'mism:0:0'.
 
-    --skip-count          Skip the counting-concrete-primers step of 
-                          --mismatch-simple, which can consume a surprising
-                          amount of time and memory ing if INT1 and/or INT2
-                          are large.  If this option is used, the count is
-                          reported as -1.
+    --skip-count          Skip counting the number of concrete primers that
+                          match the degenerate primer after applying the
+                          --mismatch-simple criteria.  This can require a few
+                          minutes and a moderate amount of memory if INT1
+                          and/or INT2 are large.  If this option is used, the
+                          count is reported as -1.
 
     --focal-sites BED     Focus search for matches on regions surrounding sites
                           presented in BED, see also --focal-bounds
@@ -216,10 +216,12 @@ Input and output files:
 
 Misc:
 
-    --optimise            Optimise pattern searching by looking first for the tail,
-                          which typically has fewer mismatches, then for the head
-                          wherever tail candidates have been found
-    --threads INT         Use 2 or 4 threads (default $o_threads, max $o_threads_max)
+    --optimise            Optimise pattern searching by looking first for the
+                          tail, which typically supports fewer mismatches, then
+                          for the head adjacent to each tail candidate found.
+                          --optimize is a synonym option.
+    --threads INT         Use 2 or 4 threads to search for hits in parallel
+                          (default $o_threads, max $o_threads_max)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
     --no-trunc            Do not truncate regexs when displaying
     --verbose             Describe actions
@@ -235,9 +237,6 @@ GetOptions("pf=s"              => \@o_pf,
            "primers=s"         => \$o_primers,
            "tag=s"             => \$o_tag,
            "orientation=s"     => \$o_orientation,
-           "both"              => sub { $o_dir = "both" },
-           "forward"           => sub { $o_dir = "forward" },
-           "reverse"           => sub { $o_dir = "reverse" },
            "mismatch-simple=s" => \$o_mismatch_simple,
            "show-mismatches"   => \$o_showmismatches,
            "skip-count"        => \$o_skip_count,
@@ -263,8 +262,7 @@ GetOptions("pf=s"              => \@o_pf,
            "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
-die "only FR orientation currently supported" if $o_orientation ne "FR";
-die "only both strands currently supported" if $o_dir ne "both";
+die "only FR orientation is supported" if $o_orientation ne "FR";
 die "must provide results name --tag" if not $o_tag;
 die "must provide sequence to search with --ref" if not $o_ref;
 
@@ -345,7 +343,7 @@ sub trunc($) {
 }
 
 print STDERR qq{
-Assuming primer orientation '$o_orientation' as so, for example primers:
+Assuming the following primer orientation 'FR':
 
     Forward:F:ACGTCT
     Reverse:R:TTACGC
@@ -359,7 +357,10 @@ Amplicons are identified by being delimited by Forward-esreveR primer pairs,
 one in forward orientation, the other in reverse-complement orientation.  Note
 that together with their reverse-complements, these primers can delimit
 amplicons three additional ways: Reverse-drawroF, Forward-draworF and
-Reverse-esreveR.  All of these possibilities are considered here.
+Reverse-esreveR.  All of these possibilities are reported here.  Amplicons
+matched by primers in their given orientations as above are tagged 'F,R', those
+matched by primers in their reverse-complement orientations are tagged 'r,f',
+with the other possibilities tagged 'F,f' and 'r,R', respectively.
 
 Minimum amplicon length: $o_min bp
 Maximum amplicon length: $o_max bp
@@ -676,6 +677,8 @@ while (my $inseq = $in->next_seq()) {
 $in->close() if $in;
 $out_seq->close() if $out_seq;
 $out_bed->close() if $out_bed;
+$out_internalseq->close() if $out_internalseq;
+$out_internalbed->close() if $out_internalbed;
 $out_primerseq->close() if $out_primerseq;
 $out_primerbed->close() if $out_primerbed;
 
