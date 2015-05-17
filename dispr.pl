@@ -95,7 +95,8 @@ Amplicons:
     --min bp                 --max bp               --maxmax bp
 
 Input and output files:
-    --ref INPUT_FASTA
+    --ref INPUT_FASTA | INPUT_FASTA.gz | INPUT_FASTA.bz2
+
     --bed OUTPUT_BED         --seq OUTPUT_FASTA
     --primer-bed BED         --primer-seq FASTA
     --internal-bed BED       --internal-seq FASTA
@@ -106,7 +107,7 @@ Misc:
 ";
 
 my $usage = "
-$0  [ OPTIONS ] --ref fasta-file.fa
+$0  [ OPTIONS ] --ref fasta.fa
 
 Applies forward and reverse primer pairs to the reference file, identifying
 amplicons within given dimensions.  The primer sequences are sought paired in
@@ -198,7 +199,9 @@ Amplicons:
 Input and output files:
 
     --ref INPUT_FASTA     Input, Fasta reference sequence in which to find
-                          amplicons
+                          amplicons.  If the filename ends with '.gz', it is
+                          opened as a Gzipped file.  If the filename ends with
+                          '.bz2' it is opened as a Bzip2-compressed file.
 
     --bed OUTPUT_BED      Output, BED file containing identified amplicon
                           positions
@@ -475,7 +478,15 @@ my ($in,
     $out_primerseq, $out_primerbed,
     $out_internalseq, $out_internalbed);
 
-$in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or diefile($o_ref);
+if ($o_ref =~ /\.gz$/) {
+    open (my $z, "gzip -dc $o_ref |") or diefile($o_ref);
+    $in = Bio::SeqIO->new(-fh => $z, -format => 'fasta') or diefile($o_ref);
+} elsif ($o_ref =~ /\.bz2$/) {
+    open (my $z, "bzip2 -dc $o_ref |") or diefile($o_ref);
+    $in = Bio::SeqIO->new(-fh => $z, -format => 'fasta') or diefile($o_ref);
+} else {
+    $in = Bio::SeqIO->new(-file => "<$o_ref", -format => 'fasta') or diefile($o_ref);
+}
 
 if ($o_seq) {
     $out_seq = Bio::SeqIO->new(-file => ">$o_seq", -format => 'fasta') or diefile($o_ref);

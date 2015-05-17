@@ -10,3 +10,7 @@ c?_*.bed
 *.zip
 test*.bed
 test*.seq
+p.bed
+p.fa
+*.fa.gz
+*.fa.bz2
