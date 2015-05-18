@@ -14,3 +14,4 @@ p.bed
 p.fa
 *.fa.gz
 *.fa.bz2
+optimise-missing-hits.txt

@@ -38,7 +38,6 @@ my $o_pi = 1;  # 1 - 1 = 0
 my $o_primers;
 my $o_tag;
 my $o_multiplex = 0;
-my $o_orientation = "FR";
 my $o_min = 1;
 my $o_max = 2000;
 my $o_maxmax = 10000;
@@ -134,13 +133,31 @@ hit on the - strand.
 
 Primer and search parameters:
 
-    --pf FORWARD_PRIMER   Forward primer sequence (may be specified 2+ times)
-    --pr REVERSE_PRIMER   Reverse primer sequence (may be specified 2+ times)
+    --pf FORWARD_PRIMER   Forward primer sequence (may be specified 1+ times)
+    --pr REVERSE_PRIMER   Reverse primer sequence (may be specified 1+ times)
+                          For --pf and --pr, primers must be specified using
+                          the formats
+                              tag:F:CCYATGTAYY   and   tag:R:CTBARRSTG
+                          for the forward and reverse primers, respectively,
+                          with valid IUPAC-coded sequence following the second
+                          colon.  The tag is used to mark hits involving the
+                          primer.  Tags may be unique to each primer, or may
+                          be shared by at most one forward-reverse pair.
     --pi INT              Index of preloaded primer [default $o_pi]
          1: class 1 f $o_pf[0]  r $o_pr[0]
          2: class 2 f $o_pf[1]  r $o_pr[1]
-    --primers FILE        File containing primer pair(s), as forward/reverse
-                          (CURRENTLY UNSUPPORTED)
+                          This option will be removed prior to production
+                          release.
+    --primers FILE        Fasta-format file containing primer sequences.  Each
+                          primer sequence must have a name of the format
+                              >tag:F       or   >tag:R
+                              CCYATGTAYY        CTBARRSTG
+                          indicating forward and reverse primers, respectively.
+                          Similar allowances for specification of primers apply
+                          here as for the --pf/--pr options.
+
+Primers may be specified using only one of --pf/--pr, --pi or --primers.
+
     --tag TAG             String added as tag to output (REQUIRED)
     --orientation FR      Orientation of primers as given, only FR supported
     --both                Orientation of the reference sequence to search
@@ -222,7 +239,7 @@ Misc:
     --optimise            Optimise pattern searching by looking first for the
                           tail, which typically supports fewer mismatches, then
                           for the head adjacent to each tail candidate found.
-                          --optimize is a synonym option.
+                          --optimize is a synonym.
     --threads INT         Use 2 or 4 threads to search for hits in parallel
                           (default $o_threads, max $o_threads_max)
     --expand-dot          Expand '.' in regexs to '[ACGTN]'
@@ -239,7 +256,6 @@ GetOptions("pf=s"              => \@o_pf,
            "pi=i"              => \$o_pi,
            "primers=s"         => \$o_primers,
            "tag=s"             => \$o_tag,
-           "orientation=s"     => \$o_orientation,
            "mismatch-simple=s" => \$o_mismatch_simple,
            "show-mismatches"   => \$o_showmismatches,
            "skip-count"        => \$o_skip_count,
@@ -265,8 +281,6 @@ GetOptions("pf=s"              => \@o_pf,
            "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
-die "only FR orientation is supported" if $o_orientation ne "FR";
-die "must provide results name --tag" if not $o_tag;
 die "must provide sequence to search with --ref" if not $o_ref;
 
 
@@ -346,7 +360,7 @@ sub trunc($) {
 }
 
 print STDERR qq{
-Assuming the following primer orientation 'FR':
+Assuming the following forward-reverse primer pair:
 
     Forward:F:ACGTCT
     Reverse:R:TTACGC
@@ -433,10 +447,30 @@ Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
 }
 
 
-print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
+#----- load primers
 
-my $forward_primer = $o_pf[$o_pi - 1];
-my $reverse_primer = $o_pr[$o_pi - 1];
+my $forward_primer;
+my $reverse_primer;
+
+if ($o_pi) {
+    die "must provide results name --tag" if not $o_tag;
+    $forward_primer = $o_pf[$o_pi - 1];
+    $reverse_primer = $o_pr[$o_pi - 1];
+} elsif ($o_primers) {
+    my $pfile = Bio::SeqIO->new(-file => "<$o_primers", -format => 'fasta') or diefile($o_primers);
+    while (my $pseq = $pfile->next_seq()) {
+        my $pid = $pseq->display_id();
+        my ($ptag, $pdir) = split(/:/, $pid, 2);
+        die "Primer direction not one of F, R, f, r: $pdir" if $pdir !~ /^[FR]$/i;
+        $o_tag = $ptag;
+        $forward_primer = $pseq->seq() if uc($pdir) eq "F";
+        $reverse_primer = $pseq->seq() if uc($pdir) eq "R";
+    }
+} elsif (@o_pf or @o_pr) {
+    die "can't handle this option yet";
+}
+
+print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
 
 my %forward;
 my %reverse;
