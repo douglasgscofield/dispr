@@ -22,11 +22,11 @@ use Bio::Tools::SeqPattern;
 #"class1:F:CTNCAYVARCCYATGTAYYWYTTBYT"
 #"class1:R:GTYYTNACHCYRTAVAYRATRGGRTT"
 
-#my @o_pf = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class1:R:CTNCANWCNCCHATGTAYTTYYTBCT /;
-#my @o_pr = qw/ class2:F:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
-my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
-my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
-my $o_pi = 1;  # 1 - 1 = 0
+my @o_pf = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class2:F:CTNCANWCNCCHATGTAYTTYYTBCT /;
+my @o_pr = qw/ class1:R:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
+#my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
+#my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
+my $o_pi = 0;  # 1 - 1 = 0
 #>class1|F
 #CTNCAYVARCCYATGTAYYWYTTBYT
 #>class1|R
@@ -36,7 +36,6 @@ my $o_pi = 1;  # 1 - 1 = 0
 #>class2|R
 #TTYCTBARRSTRTARATNADRGGRTT
 my $o_primers;
-my $o_tag;
 my $o_multiplex = 0;
 my $o_min = 1;
 my $o_max = 2000;
@@ -71,6 +70,7 @@ my $o_mm_int3_max = 2;
 my $o_showmismatches = 0;
 my $o_skip_count = 0;
 
+my $tag;
 
 my $short_usage = "
 NOTE: '$0 --help' will provide more details.
@@ -84,7 +84,6 @@ Primer and search parameters:
     --pf FORWARD_PRIMER      --pr REVERSE_PRIMER    [ --pi INT ]
     --primers FILE           --orientation FR
     --both                   --forward              --reverse
-    --tag TAG
     --mismatch-simple INT1:INT2[:INT3]              --skip-count
     --show-mismatches
     --focal-sites BED        --focal-bounds INT1[:INT2]
@@ -123,13 +122,12 @@ The amplicon is measured from the outer extent of each primer sequence, so
 includes the primer sequences.  Interior hits produced with --interior-bed and
 --interior-seq are amplicon sequences with the primer sequences excluded.
 
-Output to both BED and Fasta files includes the hit coordinates, the value
-supplied with --tag, and the orientation of the primer which produced the
-primer hit or the primer pair which produced the amplicon/interior hit.  In the
-output, F and R indicate forward and reverse primers in their given
-orientations, while f and r indicate these primers in their reverse-complement
-orientations.  'F,R' indicates a hit on the + strand while 'r,f' indicates a
-hit on the - strand.
+Output to both BED and Fasta files includes the hit coordinates, the tag value,
+and the orientation of the primer which produced the primer hit or the primer
+pair which produced the amplicon/interior hit.  In the output, F and R indicate
+forward and reverse primers in their given orientations, while f and r indicate
+these primers in their reverse-complement orientations.  'F,R' indicates a hit
+on the + strand while 'r,f' indicates a hit on the - strand.
 
 Primer and search parameters:
 
@@ -158,7 +156,6 @@ Primer and search parameters:
 
 Primers may be specified using only one of --pf/--pr, --pi or --primers.
 
-    --tag TAG             String added as tag to output (REQUIRED)
     --orientation FR      Orientation of primers as given, only FR supported
     --both                Orientation of the reference sequence to search
     --forward             CURRENTLY ONLY --both IS SUPPORTED
@@ -255,7 +252,6 @@ GetOptions("pf=s"              => \@o_pf,
            "pr=s"              => \@o_pr,
            "pi=i"              => \$o_pi,
            "primers=s"         => \$o_primers,
-           "tag=s"             => \$o_tag,
            "mismatch-simple=s" => \$o_mismatch_simple,
            "show-mismatches"   => \$o_showmismatches,
            "skip-count"        => \$o_skip_count,
@@ -350,8 +346,8 @@ sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
 sub dump_amplicon_internal_hits($$$);  # calculate and dump amplicons and internal hits
 
-sub iftag  { return $o_tag ? "$o_tag:"  : ""; }
-sub iftags { return $o_tag ? "$o_tag: " : " "; }
+sub iftag  { return $tag ? "$tag:"  : ""; }
+sub iftags { return $tag ? "$tag: " : " "; }
 sub trunc($) {
     my $s = shift;
     return $s if $o_no_trunc;
@@ -375,9 +371,9 @@ one in forward orientation, the other in reverse-complement orientation.  Note
 that together with their reverse-complements, these primers can delimit
 amplicons three additional ways: Reverse-drawroF, Forward-draworF and
 Reverse-esreveR.  All of these possibilities are reported here.  Amplicons
-matched by primers in their given orientations as above are tagged 'F,R', those
-matched by primers in their reverse-complement orientations are tagged 'r,f',
-with the other possibilities tagged 'F,f' and 'r,R', respectively.
+matched by primers in their given orientations as above are marked 'F,R', those
+matched by primers in their reverse-complement orientations are marked 'r,f',
+with the other possibilities marked 'F,f' and 'r,R', respectively.
 
 Minimum amplicon length: $o_min bp
 Maximum amplicon length: $o_max bp
@@ -453,22 +449,44 @@ my $forward_primer;
 my $reverse_primer;
 
 if ($o_pi) {
-    die "must provide results name --tag" if not $o_tag;
-    $forward_primer = $o_pf[$o_pi - 1];
-    $reverse_primer = $o_pr[$o_pi - 1];
+    my ($ptag, $pdir, $pseq) = split(/:/, $o_pf[$o_pi - 1], 3);
+    $tag = $ptag;
+    die "Forward primer direction not one of F, f: '$pdir'" if uc($pdir) ne "F";
+    $forward_primer = $pseq;
+    ($ptag, $pdir, $pseq) = split(/:/, $o_pr[$o_pi - 1], 3);
+    die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
+    die "Reverse primer direction not one of R, r: '$pdir'" if uc($pdir) ne "R";
+    $reverse_primer = $pseq;
+    print STDERR "Loaded predefined forward and reverse primers from index $o_pi, with tag '$tag'\n\n";
 } elsif ($o_primers) {
     my $pfile = Bio::SeqIO->new(-file => "<$o_primers", -format => 'fasta') or diefile($o_primers);
     while (my $pseq = $pfile->next_seq()) {
         my $pid = $pseq->display_id();
         my ($ptag, $pdir) = split(/:/, $pid, 2);
-        die "Primer direction not one of F, R, f, r: $pdir" if $pdir !~ /^[FR]$/i;
-        $o_tag = $ptag;
-        $forward_primer = $pseq->seq() if uc($pdir) eq "F";
-        $reverse_primer = $pseq->seq() if uc($pdir) eq "R";
+        die "Primer direction not one of F, R, f, r: '$pdir'" if $pdir !~ /^[FR]$/i;
+        if (! $forward_primer and uc($pdir) eq "F") {
+            $forward_primer = $pseq->seq();
+            if (! $tag) {
+                $tag = $ptag;
+            } else {
+                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
+            }
+        } elsif (! $reverse_primer and uc($pdir) eq "R") {
+            $reverse_primer = $pseq->seq();
+            if (! $tag) {
+                $tag = $ptag;
+            } else {
+                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
+            }
+        } else {
+            die "$o_primers must contain one forward and one reverse primer sequence";
+        }
     }
-} elsif (@o_pf or @o_pr) {
-    die "can't handle this option yet";
+    print STDERR "Loaded forward and reverse primers from file '$o_primers', with tag '$tag'\n\n";
+} else {
+    die "No primer pair specified (--pf and --pr options not yet completed)";
 }
+die "Must provide results tag" if not $tag;
 
 print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
 
@@ -1214,14 +1232,14 @@ sub dump_primer_hits($$$) {
         my $id = $h->[3];   # id of sequence (F, R, f, r)
         if ($o_primerbed) {
             my $name = "$id:$hit";  # the hit sequence itself
-            $name = "$o_tag:$name" if $o_tag;
+            $name = "$tag:$name" if $tag;
             $name .= "," . $h->[4] if $o_showmismatches;
             $out_primerbed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_primerseq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
-            $name .= ":$o_tag" if $o_tag;
+            $name .= ":$tag" if $tag;
             $name .= ":$id";
             $name .= "," . $h->[4] if $o_showmismatches;
             my $hitseq = Bio::Seq->new(-id => $name,
@@ -1280,26 +1298,26 @@ sub dump_amplicon_internal_hits($$$) {
 
     foreach my $h (@amp) {
         if ($o_bed) {
-            my $name = "$o_tag:".$h->[3].":".length($h->[2]);
+            my $name = "$tag:".$h->[3].":".length($h->[2]);
             $name .= "," . $h->[7] if $o_showmismatches;
             $out_bed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_seq) {
             # use base-1 GFF-type intervals in Fasta name
-            my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$o_tag:".$h->[3].":".length($h->[2]);
+            my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$tag:".$h->[3].":".length($h->[2]);
             $name .= "," . $h->[7] if $o_showmismatches;
             $out_seq->write_seq(Bio::Seq->new(-id => $name,
                                               -seq => $h->[2],
                                               -alphabet => 'dna'));
         }
         if ($o_internalbed) {
-            my $name = "$o_tag:".$h->[3].":".length($h->[6]);
+            my $name = "$tag:".$h->[3].":".length($h->[6]);
             $name .= "," . $h->[7] if $o_showmismatches;
             $out_internalbed->print($seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n");
         }
         if ($o_internalseq) {
             # use base-1 GFF-type intervals in Fasta name
-            my $name = "$seqname:".($h->[4] + 1)."-".$h->[5].":$o_tag:".$h->[3].":".length($h->[6]);
+            my $name = "$seqname:".($h->[4] + 1)."-".$h->[5].":$tag:".$h->[3].":".length($h->[6]);
             $name .= "," . $h->[7] if $o_showmismatches;
             $out_internalseq->write_seq(Bio::Seq->new(-id => $name,
                                                       -seq => $h->[6],
