@@ -2,6 +2,7 @@ databases
 intervals
 primers
 test*.fa
+test*.fai
 out.delta
 refs
 c?_*.fa
@@ -14,4 +15,5 @@ p.bed
 p.fa
 *.fa.gz
 *.fa.bz2
-optimise-missing-hits.txt
+optimise-missing-hits.*
+opt.*

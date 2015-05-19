@@ -54,8 +54,8 @@ my $o_expand_dot = 0;
 my $o_no_trunc = 0;
 my $o_optimise = 0;
 my $o_verbose;
-my $o_debug_optimise = 1;
-my $o_debug_focal = 1;
+my $o_debug_optimise = 0;
+my $o_debug_focal = 0;
 my $o_help;
 my $o_threads = 0;# 4;
 my $o_threads_max = 4;
@@ -274,6 +274,8 @@ GetOptions("pf=s"              => \@o_pf,
            "expand-dot"        => \$o_expand_dot,
            "no-trunc"          => \$o_no_trunc,
            "verbose"           => \$o_verbose,
+           "debug-optimise"    => \$o_debug_optimise,
+           "debug-focal"       => \$o_debug_focal,
            "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
@@ -339,6 +341,7 @@ sub create_mismatch($$$$);  # create mismatch sequences from degenerate sequence
 sub apply_mismatch_simple($$$$);  # prepare query sequence for mismatches
 sub count_head_tail($$);  # count number of sequences with mismatches
 sub show_mismatches($$);  # count the number of mismatches in each of $1 vs. $2
+sub show_mismatches2($$);  # count the number of mismatches in $1 vs. $2, return mismatch string
 sub match_positions($$$);  # search for primer hits
 sub match_positions_focal($$$$);  # search for primer hits in focal regions
 sub match_positions_optimise($$$$$$$);  # search for head and tail of primer hits separately
@@ -811,11 +814,13 @@ sub prepare_primer($) {
     $dest{revprimer} = $seqpattern->revcom()->str();
     $dest{SeqPattern} = $seqpattern;
     if ($o_mismatch_simple) {
-        my ($mmpat, $headpat, $tailpat, $mmcount) = apply_mismatch_simple(
+        my ($mmpat, $headpat, $tailpat, $mmcount, $head, $tail) = apply_mismatch_simple(
             $primer, $o_mm_int1, $o_mm_int2, $o_mm_int3);
         $dest{forwardpattern} = $mmpat;
         $dest{forwardheadpattern} = $headpat;
         $dest{forwardtailpattern} = $tailpat;
+        $dest{forwardhead} = $head;
+        $dest{forwardtail} = $tail;
         $dest{headlen} = $o_mm_int2;
         $dest{taillen} = length($primer) - $o_mm_int2;
         $dest{count} = $mmcount;
@@ -833,6 +838,8 @@ sub prepare_primer($) {
             print STDERR "revcomppattern      $dest{revcomppattern}\n";
             print STDERR "headlen             $dest{headlen}\n";
             print STDERR "taillen             $dest{taillen}\n";
+            print STDERR "forwardhead         $dest{forwardhead}\n";
+            print STDERR "forwardtail         $dest{forwardtail}\n";
             print STDERR "forwardheadpattern  $dest{forwardheadpattern}\n";
             print STDERR "revcompheadpattern  $dest{revcompheadpattern}\n";
             print STDERR "forwardtailpattern  $dest{forwardtailpattern}\n";
@@ -1014,7 +1021,7 @@ apply_mismatch_simple: full_pat = $full_pat
 " if $o_verbose;
     }
     my $count = $o_skip_count ? -1 : $head_count * $tail_count;
-    return ($full_pat, $head_pat, $tail_pat, $count);
+    return ($full_pat, $head_pat, $tail_pat, $count, $head, $tail);
 }
 
 
@@ -1073,6 +1080,26 @@ sub show_mismatches($$) {
         $mismatch_string = "0" if $n_mismatches == 0;
         push @{$h}, "mism:$n_mismatches:$mismatch_string";
     }
+}
+
+sub show_mismatches2($$) {
+    my ($hit, $pat) = @_;
+    my @hchar = map { uc } split //, $hit;
+    my @pchar = map { uc } split //, $pat;
+    die "pattern and hit lengths don't match, ".scalar @pchar." vs ".scalar @hchar if @pchar != @hchar;
+    my $n_mismatches = 0;
+    my $mismatch_string = "0" x @hchar;
+    foreach my $i (0..$#pchar) {
+        # If the character in the hit sequence is not part of the ambiguity
+        # of the same character in the pattern, then it is a mismatch.
+        if (not exists $iupac{$pchar[$i]}{$hchar[$i]}) {
+            ++$n_mismatches;
+            substr($mismatch_string, $i, 1) = "1";
+        }
+    }
+    # add mismatch message
+    $mismatch_string = "0" if $n_mismatches == 0;
+    return "mism:$n_mismatches:".scalar @pchar.":$mismatch_string";
 }
 
 
@@ -1164,7 +1191,9 @@ sub match_positions_optimise($$$$$$$) {
         my ($tailbeg, $tailend) = ($-[0], $+[0]);
         ++$tail_hits;
         my $tail = substr($seq, $tailbeg, $tailend - $tailbeg);
-        print STDERR "match_positions_optimise: $id  tail#$tail_hits  $tailbeg-$tailend   $tail\n" if $o_debug_optimise;
+        if ($o_debug_optimise) {
+            print STDERR "match_positions_optimise: $id  tail HIT #$tail_hits  $tailbeg-$tailend   $tail  $forward{forwardtail} ".show_mismatches2($tail, $forward{forwardtail})."\n";
+        }
         my ($headbeg, $headend);
         if ($is_rc) {
             $headbeg = $tailend;
@@ -1174,11 +1203,15 @@ sub match_positions_optimise($$$$$$$) {
             $headbeg = $headend - $headlen;
         }
         my $head = substr($seq, $headbeg, $headend - $headbeg);
-        print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $head\n" if $o_debug_optimise;
-        print STDERR "match_positions_optimise: $id  head#$head_hits  $headbeg-$headend   $headpat\n" if $o_debug_optimise;
+        if ($o_debug_optimise) {
+            print STDERR "match_positions_optimise: $id  $headbeg-$headend   $head  $forward{forwardhead} ".show_mismatches2($head, $forward{forwardhead})."\n";
+            #print STDERR "match_positions_optimise: $id  $headbeg-$headend   ".trunc($headpat)."\n";
+        }
         if ($head =~ /$headpat/aai) {
-            print STDERR "match_positions_optimise:   $headpat  matches  $head\n" if $o_debug_optimise;
             ++$head_hits;
+            if ($o_debug_optimise) {
+                print STDERR "match_positions_optimise: head HIT #$head_hits ".trunc($headpat)." matches  $head\n";
+            }
             my ($beg, $end, $hit);
             if ($is_rc) {
                 $beg = $tailbeg;
@@ -1191,7 +1224,9 @@ sub match_positions_optimise($$$$$$$) {
             }
             push @ans, [ $beg, $end, $hit, $id ];
         } else {
-            print STDERR "match_positions_optimise:   $headpat  does no match  $head\n" if $o_debug_optimise;
+            if ($o_debug_optimise) {
+                print STDERR "match_positions_optimise: head miss, ".trunc($headpat)." vs. $head\n";
+            }
         }
     }
     return @ans;
