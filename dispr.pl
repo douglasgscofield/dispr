@@ -1,5 +1,35 @@
 #!/usr/bin/env perl
 
+#   dispr: Degenerate In-Silico PcR
+#   Copyright (C) 2015  Douglas G. Scofield
+#
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation; either version 2 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License along
+#   with this program; if not, write to the Free Software Foundation, Inc.,
+#   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+#   Please submit bugs, comments and suggestions to:
+#
+#       https://github.com/douglasgscofield/dispr/issues
+#
+#   Douglas G. Scofield
+#   Evolutionary Biology Centre, Uppsala University
+#   Norbyvagen 18D
+#   75236 Uppsala
+#   SWEDEN
+#   douglas.scofield@ebc.uu.se
+#   douglasgscofield@gmail.com
+
+
 use 5.18.4;  # needed for UPPMAX, this perl version compiled with threads
 
 my $with_threads = eval 'use threads qw(stringify); 1';
@@ -54,6 +84,8 @@ my $o_expand_dot = 0;
 my $o_no_trunc = 0;
 my $o_optimise = 0;
 my $o_verbose;
+my $o_debug_match = 0;
+my $o_debug_mismatch = 0;
 my $o_debug_optimise = 0;
 my $o_debug_focal = 0;
 my $o_help;
@@ -184,12 +216,14 @@ Primers may be specified using only one of --pf/--pr, --pi or --primers.
     --skip-count          Skip counting the number of concrete primers that
                           match the degenerate primer after applying the
                           --mismatch-simple criteria.  This can require a few
-                          minutes and a moderate amount of memory if INT1
-                          and/or INT2 are large.  If this option is used, the
+                          minutes and a moderate amount of memory if many
+                          mismatches are allowed.  If this option is used, the
                           count is reported as -1.
 
     --focal-sites BED     Focus search for matches on regions surrounding sites
-                          presented in BED, see also --focal-bounds
+                          presented in BED, see also --focal-bounds.  Note that
+                          --optimise and --threads cannot be specified when
+                          using this option.
     --focal-bounds INT1[:INT2]
                           Relative to sites given in --focal-sites, scan
                           upstream of the 5' extent INT1 bp and downstream of
@@ -236,12 +270,29 @@ Misc:
     --optimise            Optimise pattern searching by looking first for the
                           tail, which typically supports fewer mismatches, then
                           for the head adjacent to each tail candidate found.
-                          --optimize is a synonym.
+                          --optimize is a synonym.  This option cannot be used
+                          when restricting the search via --focal-sites.
+
+Note that with --optimise, the search is optimised for increased speed by first
+searching for hits against the (presumably) lower-mismatch 3' tail section, and
+then only searching for hits against the (presumably) higher-mismatch 5' head
+section once a possible tail hit is found.  Note 'presumably'; searches which
+allow for greater mismatches, either in the original degenerate sequence or
+when specified with --mismatch-simple, require more time.  If your mismatch
+profile does not fit the assumptions stated here, then --optimise might not be
+helpful.
+
     --threads INT         Use 2 or 4 threads to search for hits in parallel
-                          (default $o_threads, max $o_threads_max)
-    --expand-dot          Expand '.' in regexs to '[ACGTN]'
+                          (default $o_threads, max $o_threads_max).  Threads
+                          cannot be used when restricting the search via
+                          --focal-sites.
+
+    --expand-dot          Expand '.' in regexs to '[ACGTN]'.  With a
+                          guaranteed DNA alphabet, this is not likely to be
+                          helpful and might slow down pattern matching.
     --no-trunc            Do not truncate regexs when displaying
     --verbose             Describe actions
+
     --help/-h/-?          Produce this longer help
 
 ";
@@ -274,6 +325,8 @@ GetOptions("pf=s"              => \@o_pf,
            "expand-dot"        => \$o_expand_dot,
            "no-trunc"          => \$o_no_trunc,
            "verbose"           => \$o_verbose,
+           "debug-match"       => \$o_debug_match,
+           "debug-mismatch"    => \$o_debug_mismatch,
            "debug-optimise"    => \$o_debug_optimise,
            "debug-focal"       => \$o_debug_focal,
            "help|h|?"          => \$o_help) or die $short_usage;
@@ -283,8 +336,8 @@ die "must provide sequence to search with --ref" if not $o_ref;
 
 
 ## re::engine::RE2 regexp engine
-print STDERR iftags()."We found 're::engine::RE2'\n" if $with_RE2;
-print STDERR iftags()."Apparently we did not find 're::engine::RE2'\n" if not $with_RE2;
+print STDERR "Found 're::engine::RE2'\n" if $with_RE2 and $o_verbose;
+print STDERR "Did not find 're::engine::RE2'\n" if not $with_RE2 and $o_verbose;
 
 
 ## --mismatch-simple option processing
@@ -358,8 +411,92 @@ sub trunc($) {
     return length($s) > $lim ? substr($s, 0, $lim - 11)."<truncated>" : $s;
 }
 
+print STDERR "Please see the caution available via '$0 --help' regarding --optimise.\n\n" if $o_optimise;
+
+sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
+
+
+#----- load primers
+
+my $forward_primer;
+my $reverse_primer;
+
+if ($o_pi) {
+    my ($ptag, $pdir, $pseq) = split(/:/, $o_pf[$o_pi - 1], 3);
+    $tag = $ptag;
+    die "Forward primer direction not one of F, f: '$pdir'" if uc($pdir) ne "F";
+    $forward_primer = $pseq;
+    ($ptag, $pdir, $pseq) = split(/:/, $o_pr[$o_pi - 1], 3);
+    die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
+    die "Reverse primer direction not one of R, r: '$pdir'" if uc($pdir) ne "R";
+    $reverse_primer = $pseq;
+    print STDERR "Loaded predefined forward and reverse primers from index $o_pi, with tag '$tag'\n";
+} elsif ($o_primers) {
+    my $pfile = Bio::SeqIO->new(-file => "<$o_primers", -format => 'fasta') or diefile($o_primers);
+    while (my $pseq = $pfile->next_seq()) {
+        my $pid = $pseq->display_id();
+        my ($ptag, $pdir) = split(/:/, $pid, 2);
+        die "Primer direction not one of F, R, f, r: '$pdir'" if $pdir !~ /^[FR]$/i;
+        if (! $forward_primer and uc($pdir) eq "F") {
+            $forward_primer = $pseq->seq();
+            if (! $tag) {
+                $tag = $ptag;
+            } else {
+                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
+            }
+        } elsif (! $reverse_primer and uc($pdir) eq "R") {
+            $reverse_primer = $pseq->seq();
+            if (! $tag) {
+                $tag = $ptag;
+            } else {
+                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
+            }
+        } else {
+            die "$o_primers must contain one forward and one reverse primer sequence";
+        }
+    }
+    print STDERR "Loaded forward and reverse primers from file '$o_primers', with tag '$tag'\n";
+} else {
+    die "No primer pair specified (--pf and --pr options not yet completed)";
+}
+die "Must provide results tag" if not $tag;
+
+my %forward;
+my %reverse;
+
+if ($with_threads) {  # we have at least 2 threads
+    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primer);
+    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primer);
+    print STDERR "Preparing forward and reverse primers with threads $forward_t and $reverse_t ...\n" if $o_verbose;
+    %forward = $forward_t->join();
+    %reverse = $reverse_t->join();
+} else {
+    %forward = prepare_primer($forward_primer);
+    %reverse = prepare_primer($reverse_primer);
+}
+
+
+print STDERR "
+Primer sequences as given:
+
+".iftags()."forward primer : $forward_primer, ".length($forward_primer)." bp
+".iftags()."reverse primer : $reverse_primer, ".length($reverse_primer)." bp
+
+Patterns matching unrolled primers";
+if ($o_mismatch_simple) {
+    print STDERR " after applying '--mismatch-simple $o_mismatch_simple'";
+}
+print STDERR ":
+
+".iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences
+".iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement
+".iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences
+".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
+";
+
+
 print STDERR qq{
-Assuming the following forward-reverse primer pair:
+Assuming the following forward-reverse primer pair orientation:
 
     Forward:F:ACGTCT
     Reverse:R:TTACGC
@@ -378,27 +515,17 @@ matched by primers in their given orientations as above are marked 'F,R', those
 matched by primers in their reverse-complement orientations are marked 'r,f',
 with the other possibilities marked 'F,f' and 'r,R', respectively.
 
+} if $o_verbose;
+
+print STDERR qq{
 Minimum amplicon length: $o_min bp
 Maximum amplicon length: $o_max bp
 
 The maximum distance tracked between suitable primer pairs is $o_maxmax bp.
-Potential amplicons longer than $o_maxmax bp are not tracked.
+Primer pairs separated by up to this distance are counted and this count
+is reported, but amplicons are not generated in the output.
 
 };
-
-print STDERR qq{
-The search is optimised for increased speed by first searching for hits
-against the (presumably) lower-mismatch 3' tail section, and then only
-searching for hits against the (presumably) higher-mismatch 5' head section
-once a possible tail hit is found.  Note the 'presumably'; searches which
-allow for greater mismatches, either in the original degenerate sequence or
-when specified with --mismatch-simple, require more time.  If your mismatch
-profile does not fit the assumptions stated here, then --optimise might not
-be helpful.
-
-} if $o_optimise;
-
-sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
 my %focalsites;
 my $n_focalsites;
@@ -446,80 +573,7 @@ Search boundary downstream from 3' end of regions: $o_focalbounds_down bp
 }
 
 
-#----- load primers
 
-my $forward_primer;
-my $reverse_primer;
-
-if ($o_pi) {
-    my ($ptag, $pdir, $pseq) = split(/:/, $o_pf[$o_pi - 1], 3);
-    $tag = $ptag;
-    die "Forward primer direction not one of F, f: '$pdir'" if uc($pdir) ne "F";
-    $forward_primer = $pseq;
-    ($ptag, $pdir, $pseq) = split(/:/, $o_pr[$o_pi - 1], 3);
-    die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
-    die "Reverse primer direction not one of R, r: '$pdir'" if uc($pdir) ne "R";
-    $reverse_primer = $pseq;
-    print STDERR "Loaded predefined forward and reverse primers from index $o_pi, with tag '$tag'\n\n";
-} elsif ($o_primers) {
-    my $pfile = Bio::SeqIO->new(-file => "<$o_primers", -format => 'fasta') or diefile($o_primers);
-    while (my $pseq = $pfile->next_seq()) {
-        my $pid = $pseq->display_id();
-        my ($ptag, $pdir) = split(/:/, $pid, 2);
-        die "Primer direction not one of F, R, f, r: '$pdir'" if $pdir !~ /^[FR]$/i;
-        if (! $forward_primer and uc($pdir) eq "F") {
-            $forward_primer = $pseq->seq();
-            if (! $tag) {
-                $tag = $ptag;
-            } else {
-                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
-            }
-        } elsif (! $reverse_primer and uc($pdir) eq "R") {
-            $reverse_primer = $pseq->seq();
-            if (! $tag) {
-                $tag = $ptag;
-            } else {
-                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
-            }
-        } else {
-            die "$o_primers must contain one forward and one reverse primer sequence";
-        }
-    }
-    print STDERR "Loaded forward and reverse primers from file '$o_primers', with tag '$tag'\n\n";
-} else {
-    die "No primer pair specified (--pf and --pr options not yet completed)";
-}
-die "Must provide results tag" if not $tag;
-
-print STDERR iftags()."Calculating primer regexs while applying --mismatch-simple $o_mm_int1:$o_mm_int2:$o_mm_int3 ...\n" if $o_mismatch_simple;
-
-my %forward;
-my %reverse;
-
-if ($with_threads) {  # we have at least 2 threads
-    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primer);
-    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primer);
-    print STDERR "Preparing forward and reverse primers with threads $forward_t and $reverse_t ...\n" if $o_verbose;
-    %forward = $forward_t->join();
-    %reverse = $reverse_t->join();
-} else {
-    %forward = prepare_primer($forward_primer);
-    %reverse = prepare_primer($reverse_primer);
-}
-
-
-print STDERR "
-Patterns matching unrolled primers:
-".iftags()."forward primer : $forward_primer, ".length($forward_primer)." bp
-".iftags()."reverse primer : $reverse_primer, ".length($reverse_primer)." bp
-
-Patterns matching unrolled primers:
-
-".iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences
-".iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement
-".iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences
-".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
-";
 
 my $do_amplicon = ($o_bed or $o_seq);
 my $do_primer = ($o_primerbed or $o_primerseq);
@@ -881,7 +935,7 @@ sub create_mismatch($$$$) {
     my $len = length($seq);
     undef @$degens;
     undef @$pats;
-    print STDERR "create_mismatch: seq = $seq, mism = $mism\n" if $o_verbose;
+    print STDERR "create_mismatch: seq = $seq, mism = $mism\n" if $o_debug_mismatch;
     if ($mism == 1) {
         for (my $i = 0; $i < $len; ++$i) {
             my $s = $seq;
@@ -889,7 +943,7 @@ sub create_mismatch($$$$) {
             push @$degens, $s;
             my $sp = Bio::Tools::SeqPattern->new(-seq => $s, -type => 'dna');
             my $pat = expand_dot($sp->expand());
-            print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+            print STDERR "i = $i, pat = $pat\n" if $o_debug_mismatch;
             push @$pats, $pat;
         }
     } elsif ($mism == 2) {
@@ -902,7 +956,7 @@ sub create_mismatch($$$$) {
                 push @$degens, $ss;
                 my $sp = Bio::Tools::SeqPattern->new(-seq => $ss, -type => 'dna');
                 my $pat = expand_dot($sp->expand());
-                print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                print STDERR "i = $i, pat = $pat\n" if $o_debug_mismatch;
                 push @$pats, $pat;
             }
         }
@@ -919,7 +973,7 @@ sub create_mismatch($$$$) {
                     push @$degens, $sss;
                     my $sp = Bio::Tools::SeqPattern->new(-seq => $sss, -type => 'dna');
                     my $pat = expand_dot($sp->expand());
-                    print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                    print STDERR "i = $i, pat = $pat\n" if $o_debug_mismatch;
                     push @$pats, $pat;
                 }
             }
@@ -940,7 +994,7 @@ sub create_mismatch($$$$) {
                         push @$degens, $ssss;
                         my $sp = Bio::Tools::SeqPattern->new(-seq => $ssss, -type => 'dna');
                         my $pat = expand_dot($sp->expand());
-                        print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                        print STDERR "i = $i, pat = $pat\n" if $o_debug_mismatch;
                         push @$pats, $pat;
                     }
                 }
@@ -965,7 +1019,7 @@ sub create_mismatch($$$$) {
                             push @$degens, $sssss;
                             my $sp = Bio::Tools::SeqPattern->new(-seq => $sssss, -type => 'dna');
                             my $pat = expand_dot($sp->expand());
-                            print STDERR "i = $i, pat = $pat\n" if $o_verbose;
+                            print STDERR "i = $i, pat = $pat\n" if $o_debug_mismatch;
                             push @$pats, $pat;
                         }
                     }
@@ -985,9 +1039,9 @@ sub create_mismatch($$$$) {
 #
 sub apply_mismatch_simple($$$$) {
     my ($p, $head_mism, $len, $tail_mism) = @_;
-    print STDERR "apply_mismatch_simple: p = $p, head_mism = $head_mism, len = $len, tail_mism = $tail_mism\n" if $o_verbose;
+    print STDERR "apply_mismatch_simple: p = $p, head_mism = $head_mism, len = $len, tail_mism = $tail_mism\n" if $o_debug_mismatch;
     my ($head, $tail) = (substr($p, 0, $len), substr($p, $len));
-    print STDERR "head = $head, tail = $tail\n" if $o_verbose;
+    print STDERR "head = $head, tail = $tail\n" if $o_debug_mismatch;
     my ($head_count, $tail_count) = (1, 1);
     my ($head_pat, $tail_pat);
     if ($head_mism) {
@@ -1013,12 +1067,12 @@ sub apply_mismatch_simple($$$$) {
                 -seq => $tail, -alphabet => 'dna'))->count();
     }
     my $full_pat = $head_pat . $tail_pat;
-    if ($o_verbose) {
+    if ($o_debug_mismatch) {
         print STDERR "
 apply_mismatch_simple: head = $head, head_pat = $head_pat
 apply_mismatch_simple: tail = $tail, tail_pat = $tail_pat
 apply_mismatch_simple: full_pat = $full_pat
-" if $o_verbose;
+";
     }
     my $count = $o_skip_count ? -1 : $head_count * $tail_count;
     return ($full_pat, $head_pat, $tail_pat, $count, $head, $tail);
@@ -1061,32 +1115,39 @@ sub count_degen($) {
 sub show_mismatches($$) {
     my ($hits, $pat) = @_;
     # each member of @$hits comes in as [ $beg, $end, $hit, $id ]
-    my @pchar = map { uc } split //, $pat;
+    #my @pchar = map { uc } split //, $pat;
     #foreach my $h (@$hits) {
     foreach my $h (@{$hits}) {
-        my @hchar = map { uc } split //, $h->[2];
-        die "pattern and hit lengths don't match" if @pchar != @hchar;
-        my $n_mismatches = 0;
-        my $mismatch_string = "0" x @hchar;
-        foreach my $i (0..$#pchar) {
-            # If the character in the hit sequence is not part of the ambiguity
-            # of the same character in the pattern, then it is a mismatch.
-            if (not exists $iupac{$pchar[$i]}{$hchar[$i]}) {
-                ++$n_mismatches;
-                substr($mismatch_string, $i, 1) = "1";
-            }
-        }
-        # add mismatch message
-        $mismatch_string = "0" if $n_mismatches == 0;
-        push @{$h}, "mism:$n_mismatches:$mismatch_string";
+        push @{$h}, show_mismatches2($h->[2], $pat);
+        #my @hchar = map { uc } split //, $h->[2];
+        #die "pattern and hit lengths don't match" if @pchar != @hchar;
+        #my $n_mismatches = 0;
+        #my $mismatch_string = "0" x @hchar;
+        #foreach my $i (0..$#pchar) {
+        #    # If the character in the hit sequence is not part of the ambiguity
+        #    # of the same character in the pattern, then it is a mismatch.
+        #    if (not exists $iupac{$pchar[$i]}{$hchar[$i]}) {
+        #        ++$n_mismatches;
+        #        substr($mismatch_string, $i, 1) = "1";
+        #    }
+        #}
+        ## add mismatch message
+        #$mismatch_string = "0" if $n_mismatches == 0;
+        #push @{$h}, "mism:$n_mismatches:$mismatch_string";
     }
 }
 
+# Count the number of mismatches in $hit vs. IUPAC sequence $pat.  Both
+# variables are scalars.  This is called by show_mismatches() for each
+# pairwise comparison.
+#
+# $pat should be in the same orientation as $hit
+#
 sub show_mismatches2($$) {
     my ($hit, $pat) = @_;
     my @hchar = map { uc } split //, $hit;
     my @pchar = map { uc } split //, $pat;
-    die "pattern and hit lengths don't match, ".scalar @pchar." vs ".scalar @hchar if @pchar != @hchar;
+    die "show_mismatches2: pattern and hit lengths don't match, ".scalar @pchar." vs ".scalar @hchar if @pchar != @hchar;
     my $n_mismatches = 0;
     my $mismatch_string = "0" x @hchar;
     foreach my $i (0..$#pchar) {
@@ -1116,10 +1177,11 @@ sub match_positions($$$) {
     my ($pat, $bioseq, $id) = @_;
     my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
     my @ans;
-    while ($seq =~ /$pat/aaig) {
+    while ($seq =~ m/$pat/aaig) {
+        print STDERR "match_positions: hit pos = ".pos($seq)."\n" if $o_debug_match;
         my ($beg, $end) = ($-[0], $+[0]);
         my $hit = substr($seq, $beg, $end - $beg);
-        print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_verbose;
+        print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_debug_match;
         push @ans, [ $beg, $end, $hit, $id ];
     }
     return @ans;
@@ -1155,7 +1217,8 @@ sub match_positions_focal($$$$) {
         my $focalid = "$id:".$site->[0]."($leftoff)-".$site->[1]."($rightoff)";
         my $focalseq = substr($seq, $left, $right - $left);
         print STDERR "match_positions_focal: focal site extracted: $focalid\n" if $o_debug_focal;
-        while ($focalseq =~ /$pat/aaig) {
+        while ($focalseq =~ m/$pat/aaig) {
+            print STDERR "match_positions_focal focal hit pos = ".pos($focalseq)."\n" if $o_debug_focal;
             my ($beg, $end) = ($-[0], $+[0]);
             my $hit = substr($focalseq, $beg, $end - $beg);
             $beg += $left; $end += $left;
@@ -1187,7 +1250,8 @@ sub match_positions_optimise($$$$$$$) {
     my @ans;
     my ($head_hits, $tail_hits) = (0, 0);
     my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
-    while ($seq =~ /$tailpat/aaig) {
+    while ($seq =~ m/$tailpat/aaig) {
+        print STDERR "match_positions_optimise: tail pos = ".pos($seq)."\n" if $o_debug_optimise;
         my ($tailbeg, $tailend) = ($-[0], $+[0]);
         ++$tail_hits;
         my $tail = substr($seq, $tailbeg, $tailend - $tailbeg);
@@ -1208,6 +1272,7 @@ sub match_positions_optimise($$$$$$$) {
             #print STDERR "match_positions_optimise: $id  $headbeg-$headend   ".trunc($headpat)."\n";
         }
         if ($head =~ /$headpat/aai) {
+            print STDERR "match_positions_optimise: head pos = ".pos($seq)."\n" if $o_debug_optimise;
             ++$head_hits;
             if ($o_debug_optimise) {
                 print STDERR "match_positions_optimise: head HIT #$head_hits ".trunc($headpat)." matches  $head\n";
@@ -1227,6 +1292,10 @@ sub match_positions_optimise($$$$$$$) {
             if ($o_debug_optimise) {
                 print STDERR "match_positions_optimise: head miss, ".trunc($headpat)." vs. $head\n";
             }
+            # Since this is 'no hit', reset match restart position (which is
+            # after the last character of the match by default) to the first
+            # character after the beginning of the tail hit
+            pos($seq) = $tailbeg + 1;
         }
     }
     return @ans;
