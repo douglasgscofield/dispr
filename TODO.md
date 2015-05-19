@@ -2,9 +2,7 @@ TODO
 ----
 
 * Pass full primer hash to match routines?
-* Figure out why some hits are missing with `--optimise`
 * multiple primer pairs
-* primer pairs from Fasta file
 * fuzzy matching?
 * Begin writing
 
@@ -12,6 +10,10 @@ TODO
 DONE
 ----
 
+* The `--primers` option may be used to load primer sequences from a Fasta file
+* The `--pf` and `--pr` options may be used to specify primer sequences on the command line
+* Added `--overlap` option to allow primer hits to overlap
+* Assure that searches for hits restart at the proper location when using `--optimise`
 * Implemented `--show-mismatches` to count mismatches when `--mismatch-simple` is in effect
 * Searches can be limited to specific regions of the reference genome with the `--focal-sites` and `--focal-bounds` options
 * Found a way to nicely check for module availability (the whole `re::engine::RE2` issue), need to end the eval with 1: eval 'use re::engine::RE2; 1';

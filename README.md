@@ -12,7 +12,7 @@ Given a pair of degenerate primers, find sites in the given genome matching some
 
 A small number of mismatches can be allowed within the primer.  The number of concrete sequences arising from degenerate primers is also calculated.
 
-The `re::engine::RE2` regular expression drop-in module is used as it is much faster than Perl's implementation for the types of patterns matched here.
+The `re::engine::RE2` regular expression drop-in module is used if available as it is much faster than Perl's implementation for the types of patterns matched here.
 
 
 
@@ -29,6 +29,9 @@ Full help is available with `dispr.pl --help`.  Some options of note:
 
 `--optimise`
 : Try to speed up searches with `--mismatch-simple` by searching for matches against the (presumably less-complex) tail portion of each primer first, and only then looking for a match against the adjacent primer head
+
+`--overlap`
+: Allow primer hits to overlap; amplicons may overlap at any time if produced by nonoverlapping primer hits
 
 `--focal-sites BED`
 : Confine primer searches to regions of the reference genome described in the BED-format file.  The option `--focal-bounds` allows the specification of a further region up- and downstream of each BED interval that is included in the search (default &plusmn;1000 bp)
