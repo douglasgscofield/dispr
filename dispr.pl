@@ -82,6 +82,7 @@ my $o_internalbed;
 my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_no_trunc = 0;
+my $o_overlap = 0;
 my $o_optimise = 0;
 my $o_verbose;
 my $o_debug_match = 0;
@@ -114,11 +115,11 @@ identifying amplicons within given dimensions.
 
 Primer and search parameters:
     --pf FORWARD_PRIMER      --pr REVERSE_PRIMER    [ --pi INT ]
-    --primers FILE           --orientation FR
-    --both                   --forward              --reverse
+    --primers FILE
     --mismatch-simple INT1:INT2[:INT3]              --skip-count
     --show-mismatches
     --focal-sites BED        --focal-bounds INT1[:INT2]
+    --overlap
 
 Amplicons:
     --multiplex              --no-multiplex
@@ -133,7 +134,7 @@ Input and output files:
 
 Misc:
     --expand-dot             --verbose              --help
-    --no-trunc               --threads              --optimise
+    --no-trunc               --threads [2 | 4]      --optimise
 ";
 
 my $usage = "
@@ -188,30 +189,35 @@ Primer and search parameters:
 
 Primers may be specified using only one of --pf/--pr, --pi or --primers.
 
-    --orientation FR      Orientation of primers as given, only FR supported
-    --both                Orientation of the reference sequence to search
-    --forward             CURRENTLY ONLY --both IS SUPPORTED
-    --reverse
-
     --mismatch-simple INT1:INT2[:INT3]
                           Allow up to INT1 mismatches in 5'-most INT2 bp of
                           each primer, with optionally INT3 mismatches in the
                           remainder of the primer.  INT1 must be <= $o_mm_int1_max,
                           INT2 must be <= $o_mm_int2_max, and INT3 must be <= $o_mm_int3_max.
-                          To allow up to 2 mismatches in the 5'-most 5 bp, 
-                          with no mismatches in the remainder:
-                          --mismatch-simple 2:5  OR  --mismatch-simple 2:5:0
+                          For example, to allow up to 2 mismatches in the
+                          5'-most 8 bp, with one mismatch in the remainder:
+                              --mismatch-simple 2:8:1
+
     --show-mismatches     Include information on the number of mismatches for
                           each primer hit.  A mismatch is counted if it is
                           not matched by one possible base expressed in the
                           original degenerate sequence.  Information is
-                          encoded in the form
-                              mism:4:1011000001000
-                          where 4 is the total number of mismatches
-                          and 1011000001000 is a position-by-position indication
-                          of whether a mismatch occurred at that position.  If
-                          there are no mismatches identified for the primer hit,
-                          then the string is 'mism:0:0'.
+                          provided in the form
+                              mism:4:13:1011000001000
+                          where 4 is the total number of mismatches, 13 is the
+                          match length, and 1011000001000 is a
+                          position-by-position indication of whether a mismatch
+                          occurred at that position.  If there are no
+                          mismatches identified for the primer hit, then the
+                          string for this example would be 'mism:0:13:0'.
+
+    --overlap             Allow primer hits to overlap.  By default primer hits
+                          for the same primer sequence in the same strand
+                          direction do not overlap, and the hit reported where
+                          two or more potential hits overlap is the 5'-most.
+                          Amplicons may overlap if produced by non-overlapping
+                          primer hits.  This also applies to matches found with
+                          the --focal-sites and --optimise options.
 
     --skip-count          Skip counting the number of concrete primers that
                           match the degenerate primer after applying the
@@ -305,6 +311,7 @@ GetOptions("pf=s"              => \@o_pf,
            "primers=s"         => \$o_primers,
            "mismatch-simple=s" => \$o_mismatch_simple,
            "show-mismatches"   => \$o_showmismatches,
+           "overlap"           => \$o_overlap,
            "skip-count"        => \$o_skip_count,
            "focal-sites=s"     => \$o_focalsites,
            "focal-bounds=s"    => \$o_focalbounds,
@@ -494,6 +501,7 @@ print STDERR ":
 ".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
 ";
 
+print STDERR "\nPrimer hits can overlap.\n" if $o_overlap;
 
 print STDERR qq{
 Assuming the following forward-reverse primer pair orientation:
@@ -523,7 +531,7 @@ Maximum amplicon length: $o_max bp
 
 The maximum distance tracked between suitable primer pairs is $o_maxmax bp.
 Primer pairs separated by up to this distance are counted and this count
-is reported, but amplicons are not generated in the output.
+is reported, but amplicons are not generated from them in the output.
 
 };
 
@@ -1115,25 +1123,8 @@ sub count_degen($) {
 sub show_mismatches($$) {
     my ($hits, $pat) = @_;
     # each member of @$hits comes in as [ $beg, $end, $hit, $id ]
-    #my @pchar = map { uc } split //, $pat;
-    #foreach my $h (@$hits) {
     foreach my $h (@{$hits}) {
         push @{$h}, show_mismatches2($h->[2], $pat);
-        #my @hchar = map { uc } split //, $h->[2];
-        #die "pattern and hit lengths don't match" if @pchar != @hchar;
-        #my $n_mismatches = 0;
-        #my $mismatch_string = "0" x @hchar;
-        #foreach my $i (0..$#pchar) {
-        #    # If the character in the hit sequence is not part of the ambiguity
-        #    # of the same character in the pattern, then it is a mismatch.
-        #    if (not exists $iupac{$pchar[$i]}{$hchar[$i]}) {
-        #        ++$n_mismatches;
-        #        substr($mismatch_string, $i, 1) = "1";
-        #    }
-        #}
-        ## add mismatch message
-        #$mismatch_string = "0" if $n_mismatches == 0;
-        #push @{$h}, "mism:$n_mismatches:$mismatch_string";
     }
 }
 
@@ -1183,6 +1174,7 @@ sub match_positions($$$) {
         my $hit = substr($seq, $beg, $end - $beg);
         print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_debug_match;
         push @ans, [ $beg, $end, $hit, $id ];
+        pos($seq) = $beg + 1 if $o_overlap;
     }
     return @ans;
 }
@@ -1224,6 +1216,7 @@ sub match_positions_focal($$$$) {
             $beg += $left; $end += $left;
             print STDERR "match_positions_focal: focal hit identified: $focalid  $beg-$end  $hit\n" if $o_debug_focal;
             push @ans, [ $beg, $end, $hit, $focalid ];
+            pos($focalseq) = $beg + 1 if $o_overlap;
         }
     }
     return @ans;
@@ -1288,6 +1281,8 @@ sub match_positions_optimise($$$$$$$) {
                 $hit = $head . $tail;
             }
             push @ans, [ $beg, $end, $hit, $id ];
+            # reset to just after the tail hit
+            pos($seq) = $tailbeg + 1 if $o_optimise;
         } else {
             if ($o_debug_optimise) {
                 print STDERR "match_positions_optimise: head miss, ".trunc($headpat)." vs. $head\n";
