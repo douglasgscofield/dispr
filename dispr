@@ -82,7 +82,7 @@ my $o_internalbed;
 my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_no_trunc = 0;
-my $o_overlap = 0;
+my $o_allow_overlap = 0;
 my $o_optimise = 0;
 my $o_verbose;
 my $o_debug_match = 0;
@@ -119,7 +119,7 @@ Primer and search parameters:
     --mismatch-simple INT1:INT2[:INT3]              --skip-count
     --show-mismatches
     --focal-sites BED        --focal-bounds INT1[:INT2]
-    --overlap
+    --allow-overlap
 
 Amplicons:
     --multiplex              --no-multiplex
@@ -211,7 +211,7 @@ Primers may be specified using only one of --pf/--pr, --pi or --primers.
                           mismatches identified for the primer hit, then the
                           string for this example would be 'mism:0:13:0'.
 
-    --overlap             Allow primer hits to overlap.  By default primer hits
+    --allow-overlap       Allow primer hits to overlap.  By default primer hits
                           for the same primer sequence in the same strand
                           direction do not overlap, and the hit reported where
                           two or more potential hits overlap is the 5'-most.
@@ -311,7 +311,7 @@ GetOptions("pf=s"              => \@o_pf,
            "primers=s"         => \$o_primers,
            "mismatch-simple=s" => \$o_mismatch_simple,
            "show-mismatches"   => \$o_showmismatches,
-           "overlap"           => \$o_overlap,
+           "allow-overlap"     => \$o_allow_overlap,
            "skip-count"        => \$o_skip_count,
            "focal-sites=s"     => \$o_focalsites,
            "focal-bounds=s"    => \$o_focalbounds,
@@ -501,7 +501,7 @@ print STDERR ":
 ".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
 ";
 
-print STDERR "\nPrimer hits can overlap.\n" if $o_overlap;
+print STDERR "\nPrimer hits can overlap.\n" if $o_allow_overlap;
 
 print STDERR qq{
 Assuming the following forward-reverse primer pair orientation:
@@ -1174,7 +1174,7 @@ sub match_positions($$$) {
         my $hit = substr($seq, $beg, $end - $beg);
         print STDERR "match_positions: $id   $beg-$end   $hit\n" if $o_debug_match;
         push @ans, [ $beg, $end, $hit, $id ];
-        pos($seq) = $beg + 1 if $o_overlap;
+        pos($seq) = $beg + 1 if $o_allow_overlap;
     }
     return @ans;
 }
@@ -1216,7 +1216,7 @@ sub match_positions_focal($$$$) {
             $beg += $left; $end += $left;
             print STDERR "match_positions_focal: focal hit identified: $focalid  $beg-$end  $hit\n" if $o_debug_focal;
             push @ans, [ $beg, $end, $hit, $focalid ];
-            pos($focalseq) = $beg + 1 if $o_overlap;
+            pos($focalseq) = $beg + 1 if $o_allow_overlap;
         }
     }
     return @ans;

@@ -1,6 +1,9 @@
 TODO
 ----
 
+* Allow tags to tag individual primers, and include indication of forward or reverse orientation
+* Allow threads in all circumstances
+* Indicate primer hits that overlap, perhaps add `--report-overlap`
 * Pass full primer hash to match routines?
 * multiple primer pairs
 * fuzzy matching?
@@ -12,7 +15,7 @@ DONE
 
 * The `--primers` option may be used to load primer sequences from a Fasta file
 * The `--pf` and `--pr` options may be used to specify primer sequences on the command line
-* Added `--overlap` option to allow primer hits to overlap
+* Added `--allow-overlap` option to allow primer hits to overlap
 * Assure that searches for hits restart at the proper location when using `--optimise`
 * Implemented `--show-mismatches` to count mismatches when `--mismatch-simple` is in effect
 * Searches can be limited to specific regions of the reference genome with the `--focal-sites` and `--focal-bounds` options
