@@ -100,8 +100,9 @@ my $o_mm_int2;  # length of 5' sequence to apply mismatches
 my $o_mm_int2_max = 10;
 my $o_mm_int3;  # number of mismatches in remainder of primer
 my $o_mm_int3_max = 2;
-my $o_showmismatches = 0;
+my $o_show_mismatches = 0;
 my $o_skip_count = 0;
+my $o_count_only = 0;
 
 my $tag;
 
@@ -115,8 +116,8 @@ identifying amplicons within given dimensions.
 
 Primer and search parameters:
     --pf FORWARD_PRIMER      --pr REVERSE_PRIMER    [ --pi INT ]
-    --primers FILE
-    --mismatch-simple INT1:INT2[:INT3]              --skip-count
+    --primers FILE           --mismatch-simple INT1:INT2[:INT3]
+    --skip-count             --count-only
     --show-mismatches
     --focal-sites BED        --focal-bounds INT1[:INT2]
     --allow-overlap
@@ -220,11 +221,16 @@ Primers may be specified using only one of --pf/--pr, --pi or --primers.
                           the --focal-sites and --optimise options.
 
     --skip-count          Skip counting the number of concrete primers that
-                          match the degenerate primer after applying the
-                          --mismatch-simple criteria.  This can require a few
-                          minutes and a moderate amount of memory if many
-                          mismatches are allowed.  If this option is used, the
-                          count is reported as -1.
+                          match each degenerate primer, including with
+                          mismatches if specified.  If many mismatches are
+                          allowed, this can require a few minutes and a
+                          moderate amount of memory.  If this option is used,
+                          the count is reported as -1.
+
+    --count-only          Count the number of concrete primers that match the
+                          degenerate primers, including with mismatches if
+                          specified, report this on stderr, and then exit.
+                          No output files are created.
 
     --focal-sites BED     Focus search for matches on regions surrounding sites
                           presented in BED, see also --focal-bounds.  Note that
@@ -310,9 +316,10 @@ GetOptions("pf=s"              => \@o_pf,
            "pi=i"              => \$o_pi,
            "primers=s"         => \$o_primers,
            "mismatch-simple=s" => \$o_mismatch_simple,
-           "show-mismatches"   => \$o_showmismatches,
+           "show-mismatches"   => \$o_show_mismatches,
            "allow-overlap"     => \$o_allow_overlap,
            "skip-count"        => \$o_skip_count,
+           "count-only"        => \$o_count_only,
            "focal-sites=s"     => \$o_focalsites,
            "focal-bounds=s"    => \$o_focalbounds,
            "primer-bed=s"      => \$o_primerbed,
@@ -357,10 +364,10 @@ if ($o_mismatch_simple) {
     die "must allow 0 to $o_mm_int3_max mismatches in remainder" if $o_mm_int3 < 0 or $o_mm_int3 > $o_mm_int3_max;
     print STDERR "Counting concrete primers may take a long time, consider --skip-count\n" if not $o_skip_count and $o_mm_int1 >= 4 and $o_mm_int2 >= 8;
 
-} elsif ($o_showmismatches) {
+} elsif ($o_show_mismatches) {
 
     print STDERR "\nNOTE: --show-mismatches makes no sense without --mismatch-simple, unsetting\n";
-    $o_showmismatches = 0;
+    $o_show_mismatches = 0;
 }
 
 # For --show-mismatches, create hash of hashes for each base code, for
@@ -419,6 +426,8 @@ sub trunc($) {
 }
 
 print STDERR "Please see the caution available via '$0 --help' regarding --optimise.\n\n" if $o_optimise;
+
+print STDERR "Confused, --skip-count and --count-only were given together.\n\n" if $o_skip_count and $o_count_only;
 
 sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
@@ -500,6 +509,8 @@ print STDERR ":
 ".iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences
 ".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
 ";
+
+exit 0 if $o_count_only;
 
 print STDERR "\nPrimer hits can overlap.\n" if $o_allow_overlap;
 
@@ -772,7 +783,7 @@ while (my $inseq = $in->next_seq()) {
 
     # The remainder of the code in this loop is quick, no need for threads
 
-    if ($o_showmismatches) {
+    if ($o_show_mismatches) {
         # Go through each set of hits, find mismatches vs. the original primer
         # and add an extra field to each describing the mismatches.
         show_mismatches(\@f_forward_hits, $forward{primer});
@@ -1332,7 +1343,7 @@ sub dump_primer_hits($$$) {
         if ($o_primerbed) {
             my $name = "$id:$hit";  # the hit sequence itself
             $name = "$tag:$name" if $tag;
-            $name .= "," . $h->[4] if $o_showmismatches;
+            $name .= "," . $h->[4] if $o_show_mismatches;
             $out_primerbed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_primerseq) {
@@ -1340,7 +1351,7 @@ sub dump_primer_hits($$$) {
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
             $name .= ":$tag" if $tag;
             $name .= ":$id";
-            $name .= "," . $h->[4] if $o_showmismatches;
+            $name .= "," . $h->[4] if $o_show_mismatches;
             my $hitseq = Bio::Seq->new(-id => $name,
                                        -seq => $h->[2],
                                        -alphabet => 'dna');
@@ -1375,7 +1386,7 @@ sub dump_amplicon_internal_hits($$$) {
             my $internal = substr($seq, $intbeg, $intend - $intbeg);
             # this uses more storage than necessary but it may not matter
             my $arr = [ $beg, $end, $amplicon, $primers_id, $intbeg, $intend, $internal ];
-            $arr->[7] = $f->[4] . "," . $r->[4] if $o_showmismatches;
+            $arr->[7] = $f->[4] . "," . $r->[4] if $o_show_mismatches;
             if ($amp_len < $o_min) {
                 push @amp_short, $arr;
             } elsif ($amp_len > $o_max) {
@@ -1398,26 +1409,26 @@ sub dump_amplicon_internal_hits($$$) {
     foreach my $h (@amp) {
         if ($o_bed) {
             my $name = "$tag:".$h->[3].":".length($h->[2]);
-            $name .= "," . $h->[7] if $o_showmismatches;
+            $name .= "," . $h->[7] if $o_show_mismatches;
             $out_bed->print($seqname."\t".$h->[0]."\t".$h->[1]."\t".$name."\n");
         }
         if ($o_seq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$tag:".$h->[3].":".length($h->[2]);
-            $name .= "," . $h->[7] if $o_showmismatches;
+            $name .= "," . $h->[7] if $o_show_mismatches;
             $out_seq->write_seq(Bio::Seq->new(-id => $name,
                                               -seq => $h->[2],
                                               -alphabet => 'dna'));
         }
         if ($o_internalbed) {
             my $name = "$tag:".$h->[3].":".length($h->[6]);
-            $name .= "," . $h->[7] if $o_showmismatches;
+            $name .= "," . $h->[7] if $o_show_mismatches;
             $out_internalbed->print($seqname."\t".$h->[4]."\t".$h->[5]."\t".$name."\n");
         }
         if ($o_internalseq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[4] + 1)."-".$h->[5].":$tag:".$h->[3].":".length($h->[6]);
-            $name .= "," . $h->[7] if $o_showmismatches;
+            $name .= "," . $h->[7] if $o_show_mismatches;
             $out_internalseq->write_seq(Bio::Seq->new(-id => $name,
                                                       -seq => $h->[6],
                                                       -alphabet => 'dna'));
