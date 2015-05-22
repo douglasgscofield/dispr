@@ -30,7 +30,7 @@
 #   douglasgscofield@gmail.com
 
 
-use 5.18.4;  # needed for UPPMAX, this perl version compiled with threads
+use 5.010;  # same dependency as re::engine::RE2
 
 my $with_threads = eval 'use threads qw(stringify); 1';
 
@@ -135,7 +135,11 @@ Input and output files:
 
 Misc:
     --expand-dot             --verbose              --help
-    --no-trunc               --threads [2 | 4]      --optimise
+    --no-trunc               ".($with_threads ? "--threads [2 | 4]      " : "")."--optimise
+
+Threads are ".($with_threads ? "" : "not ")."available
+The recommended re:engine::RE2 module for faster matching is ".($with_RE2 ? "" : "not ")."available
+
 ";
 
 my $usage = "
@@ -285,20 +289,19 @@ Misc:
                           --optimize is a synonym.  This option cannot be used
                           when restricting the search via --focal-sites.
 
-Note that with --optimise, the search is optimised for increased speed by first
-searching for hits against the (presumably) lower-mismatch 3' tail section, and
-then only searching for hits against the (presumably) higher-mismatch 5' head
-section once a possible tail hit is found.  Note 'presumably'; searches which
-allow for greater mismatches, either in the original degenerate sequence or
-when specified with --mismatch-simple, require more time.  If your mismatch
-profile does not fit the assumptions stated here, then --optimise might not be
-helpful.
-
+Note that with --optimise, the search for primer hits is optimised for
+increased speed by first searching for hits against the (presumably)
+lower-complexity 3' tail section of the primer, and then only searching for
+hits against the (presumably) higher-complexity 5' head section once a possible
+tail hit is found.  Note 'presumably'; searches which allow for greater numbers
+of mismatches or allow mismatches along a greater length of sequence require
+more time.  As a function of the number of mismatches M along a length of
+sequence L, the complexity is (L - M + 1)^M.  If your mismatch profile does not
+fit the assumptions stated here, then --optimise might not be helpful.
+".($with_threads ? "
     --threads INT         Use 2 or 4 threads to search for hits in parallel
-                          (default $o_threads, max $o_threads_max).  Threads
-                          cannot be used when restricting the search via
-                          --focal-sites.
-
+                          (default $o_threads, max $o_threads_max).  Threads cannot be used when
+                          restricting the search via --focal-sites." : "")."
     --expand-dot          Expand '.' in regexs to '[ACGTN]'.  With a
                           guaranteed DNA alphabet, this is not likely to be
                           helpful and might slow down pattern matching.
@@ -306,6 +309,9 @@ helpful.
     --verbose             Describe actions
 
     --help/-h/-?          Produce this longer help
+
+Threads are ".($with_threads ? "" : "not ")."available
+The recommended re:engine::RE2 module for faster matching is ".($with_RE2 ? "" : "not ")."available
 
 ";
 
@@ -345,14 +351,13 @@ GetOptions("pf=s"              => \@o_pf,
            "debug-focal"       => \$o_debug_focal,
            "help|h|?"          => \$o_help) or die $short_usage;
 die $usage if $o_help;
+
+print STDERR "Threads are ".($with_threads ? "" : "not ")."available\n" if $o_verbose;
+print STDERR "The recommended re:engine::RE2 module for faster matching is ".($with_RE2 ? "" : "not ")."available\n" if $o_verbose;
+say STDERR;
+
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
 die "must provide sequence to search with --ref" if not $o_ref;
-
-
-## re::engine::RE2 regexp engine
-print STDERR "Found 're::engine::RE2'\n" if $with_RE2 and $o_verbose;
-print STDERR "Did not find 're::engine::RE2'\n" if not $with_RE2 and $o_verbose;
-
 
 ## --mismatch-simple option processing
 if ($o_mismatch_simple) {
@@ -395,12 +400,10 @@ if ($o_focalsites) {
 
 
 ## Threads
-print STDERR "with_threads = $with_threads\n" if $o_verbose;
 print STDERR "OSNAME = ".$^O."\n" if $o_verbose;
-die "sorry, for some reason threads not possible" if $o_threads and not $with_threads;
+die "--threads cannot be used" if $o_threads and not $with_threads;
 die "must specify 0, 2 or $o_threads_max threads, not $o_threads" if $o_threads and $o_threads != 2 and $o_threads != $o_threads_max;
 $with_threads = $o_threads = 0 if $o_threads <= 1;
-
 
 sub expand_dot($);  # expand '.' in DNA regex
 sub prepare_primer($);  # prepare primer for searches
