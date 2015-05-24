@@ -10,16 +10,16 @@ Given a pair of degenerate primers, find sites in the given genome matching some
 * Fasta-format file of interior sequences, amplicons minus primers
 * BED-format file of interior sequences, amplicons minus primers
 
-A small number of mismatches can be allowed within the primer.  The number of concrete sequences arising from degenerate primers is also calculated.
+Some mismatch sites can be allowed within the primer.  Following typical primer binding dynamics, the 5' "head" of the primer can have up to 5 mismatches over a user-specified length, with the remaining 3' "tail" of the primer holding up to 2 mismatches.  The number of concrete sequences arising from degenerate primers is also calculated, though if a number of mismatches are allowed, this can take several minutes because an explicit counting method is used to accomodate redundancy arising from allowing for mismatches in already degenerate sequences; the count can be disabled with the `--skip-count` option.
 
-The `re::engine::RE2` regular expression drop-in module is used if available as it is much faster than Perl's implementation for the types of patterns matched here.
+Dispr is implemented using Perl regular expression matching.  The `re::engine::RE2` regular expression drop-in module is used if available as it is much faster than Perl's implementation for the types of patterns matched here.  If you are having trouble compiling `re::engine::RE2` especially on Mac OS X, try following the recommendations [here](http://stackoverflow.com/questions/17440137/error-variable-length-array-of-non-pod-element-type-when-compiling-reengine/29755725#29755725).
 
 
 
 Options
 -------
 
-Full help is available with `dispr.pl --help`.  Some options of note:
+Full help is available with `dispr --help`.  Some options of note:
 
 `--mismatch-simple INT1:INT2[:INT3]`
 : Allow for *INT1* mismatches in the 5'-most *INT2* bases ("head") of each primer, with optionally *INT3* mismatches in the remaining 3' portion ("tail") of the primer
@@ -43,3 +43,4 @@ Full help is available with `dispr.pl --help`.  Some options of note:
 License
 -------
 Gnu Public License v2
+

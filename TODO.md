@@ -9,6 +9,19 @@ TODO
 * fuzzy matching?
 * Begin writing
 
+Thoughts re: addressing multiple issues above:
+
+* how to implement separate tags
+  * check for unique tags across forward primers
+  * note primer pairs sharing a tag
+* how to implement multiplexed primers
+  * build a queue of forward primers to search and build a queue of reverse primers to search
+  * perhaps just build a queue of primers to search, with orientations part of the queue, this would require making orientation abstracted in the primer info queue
+* how to implement flexible use of threads
+  * work through a queue of primer searches
+* how to implement --orientation
+  * do i want this?  i think so... it is easier for the user than post-filtering, it could easily be implemented with a queue... primer orientations are added to the queue, or not
+
 
 DONE
 ----

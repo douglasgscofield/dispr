@@ -1,6 +1,6 @@
 #!/usr/bin/env perl
 
-#   dispr: Degenerate In-Silico PcR
+#   Dispr: Degenerate In-Silico PcR
 #   Copyright (C) 2015  Douglas G. Scofield
 #
 #   This program is free software; you can redistribute it and/or modify
@@ -56,7 +56,7 @@ my @o_pf = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class2:F:CTNCANWCNCCHATGTAYTT
 my @o_pr = qw/ class1:R:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
 #my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
 #my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
-my $o_pi = 0;  # 1 - 1 = 0
+my $o_pi = 0;
 #>class1|F
 #CTNCAYVARCCYATGTAYYWYTTBYT
 #>class1|R
@@ -90,7 +90,7 @@ my $o_debug_mismatch = 0;
 my $o_debug_optimise = 0;
 my $o_debug_focal = 0;
 my $o_help;
-my $o_threads = 0;# 4;
+my $o_threads = 0;
 my $o_threads_max = 4;
 
 my $o_mismatch_simple;
