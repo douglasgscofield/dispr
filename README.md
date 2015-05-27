@@ -1,3 +1,9 @@
+redo-primers branch
+-------------------
+
+Refactor the way primers are processed prior to doing matches.
+
+
 Degenerate In-Silico PcR
 ========================
 

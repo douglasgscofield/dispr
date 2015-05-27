@@ -873,16 +873,44 @@ sub expand_dot($) {
 # count0 for the non-mismatch sequences.  forwardpattern, revcomppattern,
 # count are all with reference to the mismatch patterns.
 #
-sub prepare_primer($) {
-    my ($primer) = @_;
+# redo-primers branch
+# This should accept a single primer sequence at at time, as it does, and
+# should return a list of hash references filled according to the
+#
+sub prepare_primer($$$) {
+    my ($primer_tag, $primer_orientation, $primer_seq) = @_;
+    # $primer_tag is the orientation of the primer itself
+    # $primer_orientation is the orientation of the primer itself
+    #    F for forward, 5'-3', Watson strand
+    #    R for reverse, 3'-5', Crick strand
+    # $primer_seq is the primer sequence
+    #
+    # for orientation FR, for F and R primers, only process the natural orientation
+    # for orientation rf, for F and R primers, only process the revcomp orientation
+    #
+    # tag  # provided with primer
+    # orientation  # provided with primer
+    # sequence  # provided with primer
+    # seq_orientation  # orientation of this primer object, relative to provided sequence
+    # seq_object  # Bio::Seq
+    # iupac_object  # Bio::Tools::IUPAC
+    # iupac_count
+    # regexp  # 
+    # pattern_object  # Bio::Tools::SeqPattern
+    # regexpquoted  # qr/ /
+    # count  # count over whole primer
+    # mismatch  # the mismatch option specification
+    # headregexp
+    # headregexpquoted  # qr/ /
+    # headlen
+    # headcount
+    # tailregexp
+    # tailregexpquoted  # qr/ /
+    # taillen
+    # tailcount
+    #
+    #
     my %dest;
-    if (index($primer, ":") >= 0) {
-        my @p = split /:/, $primer;
-        die "format is   name:dir:sequence" if @p != 3;
-        $dest{name} = $p[0];
-        $dest{dir} = $p[1];
-        $primer = $p[2];
-    }
     $dest{primer} = $primer;
     my $s = Bio::Seq->new(-seq => $primer, -alphabet => 'dna');
     $dest{Seq} = $s;

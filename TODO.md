@@ -1,4 +1,4 @@
-TODO
+TODO -- branch new-primers
 ----
 
 * Allow tags to tag individual primers, and include indication of forward or reverse orientation
