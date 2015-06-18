@@ -52,8 +52,10 @@ use Bio::Tools::SeqPattern;
 #"class1:F:CTNCAYVARCCYATGTAYYWYTTBYT"
 #"class1:R:GTYYTNACHCYRTAVAYRATRGGRTT"
 
-my @o_pf = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class2:F:CTNCANWCNCCHATGTAYTTYYTBCT /;
-my @o_pr = qw/ class1:R:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
+my @o_pf;
+my @o_pr;
+my @o_pf_preset = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class2:F:CTNCANWCNCCHATGTAYTTYYTBCT /;
+my @o_pr_preset = qw/ class1:R:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
 #my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
 #my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
 my $o_pi = 0;
@@ -437,34 +439,41 @@ sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
 #----- load primers
 
+my @forward_primers;
+my @reverse_primers;
 my $forward_primer;
 my $reverse_primer;
 
 if ($o_pi) {
-    my ($ptag, $pdir, $pseq) = split(/:/, $o_pf[$o_pi - 1], 3);
+    my ($ptag, $pdir, $pseq) = split(/:/, $o_pf_preset[$o_pi - 1], 3);
     $tag = $ptag;
     die "Forward primer direction not one of F, f: '$pdir'" if uc($pdir) ne "F";
     $forward_primer = $pseq;
-    ($ptag, $pdir, $pseq) = split(/:/, $o_pr[$o_pi - 1], 3);
+    push @forward_primers, [ $ptag, $pdir, $pseq ];
+    ($ptag, $pdir, $pseq) = split(/:/, $o_pr_preset[$o_pi - 1], 3);
     die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
     die "Reverse primer direction not one of R, r: '$pdir'" if uc($pdir) ne "R";
     $reverse_primer = $pseq;
+    push @reverse_primers, [ $ptag, $pdir, $pseq ];
     print STDERR "Loaded predefined forward and reverse primers from index $o_pi, with tag '$tag'\n";
 } elsif ($o_primers) {
     my $pfile = Bio::SeqIO->new(-file => "<$o_primers", -format => 'fasta') or diefile($o_primers);
     while (my $pseq = $pfile->next_seq()) {
         my $pid = $pseq->display_id();
         my ($ptag, $pdir) = split(/:/, $pid, 2);
+        my $seq = $pseq->seq();
         die "Primer direction not one of F, R, f, r: '$pdir'" if $pdir !~ /^[FR]$/i;
         if (! $forward_primer and uc($pdir) eq "F") {
-            $forward_primer = $pseq->seq();
+            $forward_primer = $seq;
+            push @forward_primers, [ $ptag, $pdir, $seq ];
             if (! $tag) {
                 $tag = $ptag;
             } else {
                 die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
             }
         } elsif (! $reverse_primer and uc($pdir) eq "R") {
-            $reverse_primer = $pseq->seq();
+            $reverse_primer = $seq;
+            push @reverse_primers, [ $ptag, $pdir, $seq ];
             if (! $tag) {
                 $tag = $ptag;
             } else {
@@ -476,7 +485,15 @@ if ($o_pi) {
     }
     print STDERR "Loaded forward and reverse primers from file '$o_primers', with tag '$tag'\n";
 } else {
-    die "No primer pair specified (--pf and --pr options not yet completed)";
+    # die "No primer pair specified (--pf and --pr options not yet completed)";
+    foreach my $p (@o_pf) {
+        my ($ptag, $pdir, $pseq) = split(/:/, $p, 3);
+        push @forward_primers, [ $ptag, $pdir, $pseq ];
+    }
+    foreach my $p (@o_pr) {
+        my ($ptag, $pdir, $pseq) = split(/:/, $p, 3);
+        push @reverse_primers, [ $ptag, $pdir, $pseq ];
+    }
 }
 die "Must provide results tag" if not $tag;
 
@@ -887,6 +904,9 @@ sub prepare_primer($$$) {
     #
     # for orientation FR, for F and R primers, only process the natural orientation
     # for orientation rf, for F and R primers, only process the revcomp orientation
+    # for orientation Ff, for F primers, only process the natural plus revcomp orientation
+    # for orientation rR, for R primers, only process the revcomp (forward) and 
+    #                     natural (reverse) orientation
     #
     # tag  # provided with primer
     # orientation  # provided with primer
