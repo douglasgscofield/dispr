@@ -8,6 +8,7 @@ TODO -- branch new-primers
 * multiple primer pairs
 * fuzzy matching?
 * Begin writing
+* Generalise request for DFA memory (the -max_mem argument to re::engine::RE2)
 
 Thoughts re: addressing multiple issues above:
 
@@ -26,6 +27,7 @@ Thoughts re: addressing multiple issues above:
 DONE
 ----
 
+* Generalise use of generic unassigned-scaffold prefix to compress reporting (use --unassigned-prefix STRING)
 * The `--primers` option may be used to load primer sequences from a Fasta file
 * The `--pf` and `--pr` options may be used to specify primer sequences on the command line
 * Added `--allow-overlap` option to allow primer hits to overlap

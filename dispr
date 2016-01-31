@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 #   Dispr: Degenerate In-Silico PcR
-#   Copyright (C) 2015  Douglas G. Scofield
+#   Copyright (C) 2015, 2016  Douglas G. Scofield
 #
 #   This program is free software; you can redistribute it and/or modify
 #   it under the terms of the GNU General Public License as published by
@@ -30,13 +30,14 @@
 #   douglasgscofield@gmail.com
 
 
-use 5.010;  # same dependency as re::engine::RE2
+use 5.012;  # same dependency as the most recent re::engine::RE2
 
 my $with_threads = eval 'use threads qw(stringify); 1';
 
 # Allocate 536870912 bytes for the DFA tables 1 << 29.
 # Trying 1 << 30 (1073741824 bytes) failed consistently.
 # 134217728 1<< 27
+# This should be generalised
 my $with_RE2 = eval 'use re::engine::RE2 -max_mem => 1 << 29; 1';
 
 use strict;
@@ -85,6 +86,7 @@ my $o_internalseq;
 my $o_expand_dot = 0;
 my $o_no_trunc = 0;
 my $o_allow_overlap = 0;
+my $o_unassigned_prefix = "chrUn";
 my $o_optimise = 0;
 my $o_verbose;
 my $o_debug_match = 0;
@@ -136,6 +138,7 @@ Input and output files:
     --internal-bed BED       --internal-seq FASTA
 
 Misc:
+    --unassigned-prefix STRING
     --expand-dot             --verbose              --help
     --no-trunc               ".($with_threads ? "--threads [2 | 4]      " : "")."--optimise
 
@@ -308,6 +311,12 @@ fit the assumptions stated here, then --optimise might not be helpful.
                           guaranteed DNA alphabet, this is not likely to be
                           helpful and might slow down pattern matching.
     --no-trunc            Do not truncate regexs when displaying
+    --unassigned-prefix STRING
+                          A prefix that marks the names of unassigned scaffolds
+                          in the reference sequence set. This compresses
+                          informational output for these scaffolds into a single
+                          summary set marked by the prefix, but does not affect
+                          results in BED or sequence files [default $o_unassigned_prefix]
     --verbose             Describe actions
 
     --help/-h/-?          Produce this longer help
@@ -334,6 +343,7 @@ GetOptions("pf=s"              => \@o_pf,
            "primer-seq=s"      => \$o_primerseq,
            "internal-bed=s"    => \$o_internalbed,
            "internal-seq=s"    => \$o_internalseq,
+           "unassigned-prefix=s" => \$o_unassigned_prefix,
            "multiplex"         => \$o_multiplex,
            "no-multiplex"      => sub { $o_multiplex = 0 },
            "min=i"             => \$o_min,
@@ -660,8 +670,8 @@ my $Un;
 while (my $inseq = $in->next_seq()) {
     my $this_seqname = $inseq->display_id();
     my $this_sequence = $inseq->seq();
-    if ($this_seqname =~ /^chrUn/) {
-        print STDERR "chrUn*:".iftag()." searching ...\n" if not $Un;
+    if ($o_unassigned_prefix and $this_seqname =~ /^$o_unassigned_prefix/) {
+        print STDERR "${o_unassigned_prefix}*:".iftag()." searching ...\n" if not $Un;
         ++$Un;
     } else {
         print STDERR "$this_seqname:".iftag()." searching ...\n";
@@ -771,12 +781,12 @@ while (my $inseq = $in->next_seq()) {
 
         } elsif ($o_focalsites) {
 
-            if (not exists $focalsites{$this_seqname} and $this_seqname !~ /^chrUn/) {
-                print STDERR "No focal sites on --ref sequence $this_seqname\n";
-                next;
-            } else {
-                if ($this_seqname !~ /^chrUn/) {
-                    print STDERR scalar(@{$focalsites{$this_seqname}})." focal sites on --ref sequence $this_seqname\n";
+            if (! $o_unassigned_prefix or $this_seqname !~ /^$o_unassigned_prefix/) {
+                if (not exists $focalsites{$this_seqname}) {
+                    print STDERR "No focal sites on --ref sequence $this_seqname\n";
+                    next;
+                } else {
+                     print STDERR scalar(@{$focalsites{$this_seqname}})." focal sites on --ref sequence $this_seqname\n";
                 }
             }
 
@@ -895,12 +905,12 @@ sub expand_dot($) {
 # should return a list of hash references filled according to the
 #
 sub prepare_primer($$$) {
-    my ($primer_tag, $primer_orientation, $primer_seq) = @_;
+    my ($primer_tag, $primer_orientation, $primer_sequence) = @_;
     # $primer_tag is the orientation of the primer itself
     # $primer_orientation is the orientation of the primer itself
     #    F for forward, 5'-3', Watson strand
     #    R for reverse, 3'-5', Crick strand
-    # $primer_seq is the primer sequence
+    # $primer_sequence is the primer sequence
     #
     # for orientation FR, for F and R primers, only process the natural orientation
     # for orientation rf, for F and R primers, only process the revcomp orientation
@@ -931,30 +941,33 @@ sub prepare_primer($$$) {
     #
     #
     my %dest;
-    $dest{primer} = $primer;
-    my $s = Bio::Seq->new(-seq => $primer, -alphabet => 'dna');
-    $dest{Seq} = $s;
-    my $seqpattern = Bio::Tools::SeqPattern->new(-seq => $s->seq(), -type => 'dna');
-    $dest{revprimer} = $seqpattern->revcom()->str();
-    $dest{SeqPattern} = $seqpattern;
+    $dest{tag} = $primer_tag;
+    $dest{orientation} = $primer_orientation;
+    $dest{sequence} = $primer_sequence;
+    $dest{length} = length($dest{sequence});
+    my $Seq = Bio::Seq->new(-seq => $dest{sequence}, -alphabet => 'dna');
+    $dest{Seq} = $Seq;
+    my $SeqPattern = Bio::Tools::SeqPattern->new(-seq => $Seq->seq(), -type => 'dna');
+    $dest{revsequence} = $SeqPattern->revcom()->str();
+    $dest{SeqPattern} = $SeqPattern;
     if ($o_mismatch_simple) {
         my ($mmpat, $headpat, $tailpat, $mmcount, $head, $tail) = apply_mismatch_simple(
-            $primer, $o_mm_int1, $o_mm_int2, $o_mm_int3);
+            $dest{sequence}, $o_mm_int1, $o_mm_int2, $o_mm_int3);
         $dest{forwardpattern} = $mmpat;
         $dest{forwardheadpattern} = $headpat;
         $dest{forwardtailpattern} = $tailpat;
         $dest{forwardhead} = $head;
         $dest{forwardtail} = $tail;
         $dest{headlen} = $o_mm_int2;
-        $dest{taillen} = length($primer) - $o_mm_int2;
+        $dest{taillen} = $dest{length} - $o_mm_int2;
         $dest{count} = $mmcount;
         $dest{revcomppattern} = Bio::Tools::SeqPattern->new(-seq => $mmpat, -type => 'dna')->revcom()->expand();
         $dest{revcompheadpattern} = Bio::Tools::SeqPattern->new(-seq => $headpat, -type => 'dna')->revcom()->expand();
         $dest{revcomptailpattern} = Bio::Tools::SeqPattern->new(-seq => $tailpat, -type => 'dna')->revcom()->expand();
         $dest{mismatch} = $o_mismatch_simple;
-        $dest{forward0} = expand_dot($seqpattern->expand());
-        $dest{revcomp0} = expand_dot($seqpattern->revcom(1)->expand());
-        my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
+        $dest{forward0} = expand_dot($SeqPattern->expand());
+        $dest{revcomp0} = expand_dot($SeqPattern->revcom(1)->expand());
+        my $iupac = Bio::Tools::IUPAC->new(-seq => $Seq);
         $dest{IUPAC0} = $iupac;
         $dest{count0} = $iupac->count();
         if ($o_verbose) {
@@ -976,9 +989,9 @@ sub prepare_primer($$$) {
         $dest{revcompheadquoted} = qr/$dest{revcompheadpattern}/aai;
         $dest{revcomptailquoted} = qr/$dest{revcomptailpattern}/aai;
     } else {
-        $dest{forwardpattern} = expand_dot($seqpattern->expand());
-        $dest{revcomppattern} = expand_dot($seqpattern->revcom(1)->expand());
-        my $iupac = Bio::Tools::IUPAC->new(-seq => $s);
+        $dest{forwardpattern} = expand_dot($SeqPattern->expand());
+        $dest{revcomppattern} = expand_dot($SeqPattern->revcom(1)->expand());
+        my $iupac = Bio::Tools::IUPAC->new(-seq => $Seq);
         $dest{IUPAC} = $iupac;
         $dest{count} = $iupac->count();
     }
