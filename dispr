@@ -55,11 +55,6 @@ use Bio::Tools::SeqPattern;
 
 my @o_pf;
 my @o_pr;
-my @o_pf_preset = qw/ class1:F:CTNCAYVARCCYATGTAYYWYTTBYT class2:F:CTNCANWCNCCHATGTAYTTYYTBCT /;
-my @o_pr_preset = qw/ class1:R:GTYYTNACHCYRTAVAYRATRGGRTT class2:R:TTYCTBARRSTRTARATNADRGGRTT /;
-#my @o_pf = qw/ CTNCAYVARCCYATGTAYYWYTTBYT CTNCANWCNCCHATGTAYTTYYTBCT /;
-#my @o_pr = qw/ GTYYTNACHCYRTAVAYRATRGGRTT TTYCTBARRSTRTARATNADRGGRTT /;
-my $o_pi = 0;
 #>class1|F
 #CTNCAYVARCCYATGTAYYWYTTBYT
 #>class1|R
@@ -174,21 +169,16 @@ on the + strand while 'r,f' indicates a hit on the - strand.
 
 Primer and search parameters:
 
-    --pf FORWARD_PRIMER   Forward primer sequence (may be specified 1+ times)
-    --pr REVERSE_PRIMER   Reverse primer sequence (may be specified 1+ times)
+    --pf FORWARD_PRIMER   Forward primer sequence
+    --pr REVERSE_PRIMER   Reverse primer sequence
                           For --pf and --pr, primers must be specified using
                           the formats
                               tag:F:CCYATGTAYY   and   tag:R:CTBARRSTG
                           for the forward and reverse primers, respectively,
                           with valid IUPAC-coded sequence following the second
                           colon.  The tag is used to mark hits involving the
-                          primer.  Tags may be unique to each primer, or may
-                          be shared by at most one forward-reverse pair.
-    --pi INT              Index of preloaded primer [default $o_pi]
-         1: class 1 f $o_pf[0]  r $o_pr[0]
-         2: class 2 f $o_pf[1]  r $o_pr[1]
-                          This option will be removed prior to production
-                          release.
+                          primer pair and must be identical for each
+                          forward-reverse pair.
     --primers FILE        Fasta-format file containing primer sequences.  Each
                           primer sequence must have a name of the format
                               >tag:F       or   >tag:R
@@ -197,7 +187,7 @@ Primer and search parameters:
                           Similar allowances for specification of primers apply
                           here as for the --pf/--pr options.
 
-Primers may be specified using only one of --pf/--pr, --pi or --primers.
+Primers may be specified using only one of --pf/--pr or --primers.
 
     --mismatch-simple INT1:INT2[:INT3]
                           Allow up to INT1 mismatches in 5'-most INT2 bp of
@@ -294,22 +284,20 @@ Misc:
                           --optimize is a synonym.  This option cannot be used
                           when restricting the search via --focal-sites.
 
-Note that with --optimise, the search for primer hits is optimised for
-increased speed by first searching for hits against the (presumably)
-lower-complexity 3' tail section of the primer, and then only searching for
-hits against the (presumably) higher-complexity 5' head section once a possible
-tail hit is found.  Note 'presumably'; searches which allow for greater numbers
-of mismatches or allow mismatches along a greater length of sequence require
-more time.  As a function of the number of mismatches M along a length of
-sequence L, the complexity is (L - M + 1)^M.  If your mismatch profile does not
-fit the assumptions stated here, then --optimise might not be helpful.
+The --optimise option will have the expected effect if the 3' tail section of the
+primer is of lower complexity than the 5' head section. Searches which allow for
+greater numbers of mismatches or allow mismatches along a greater length of
+sequence require more time.  As a function of the number of mismatches M along a
+length of sequence L, the complexity is (L - M + 1)^M.  If your mismatch profile
+does not fit the assumptions stated here, then --optimise might not be helpful.
 ".($with_threads ? "
     --threads INT         Use 2 or 4 threads to search for hits in parallel
                           (default $o_threads, max $o_threads_max).  Threads cannot be used when
                           restricting the search via --focal-sites." : "")."
-    --expand-dot          Expand '.' in regexs to '[ACGTN]'.  With a
-                          guaranteed DNA alphabet, this is not likely to be
-                          helpful and might slow down pattern matching.
+    --expand-dot          Expand '.' in regexs to '[ACGTN]'.  When the sequence
+                          being searched has a guaranteed DNA alphabet, this is
+                          not likely to be helpful and might slow down pattern
+                          matching.
     --no-trunc            Do not truncate regexs when displaying
     --unassigned-prefix STRING
                           A prefix that marks the names of unassigned scaffolds
@@ -322,7 +310,7 @@ fit the assumptions stated here, then --optimise might not be helpful.
     --help/-h/-?          Produce this longer help
 
 Threads are ".($with_threads ? "" : "not ")."available
-The recommended re:engine::RE2 module for faster matching is ".($with_RE2 ? "" : "not ")."available
+The recommended re:engine::RE2 module for faster pattern matching is ".($with_RE2 ? "" : "not ")."available
 
 ";
 
@@ -330,7 +318,6 @@ die $short_usage if not @ARGV;
 
 GetOptions("pf=s"              => \@o_pf,
            "pr=s"              => \@o_pr,
-           "pi=i"              => \$o_pi,
            "primers=s"         => \$o_primers,
            "mismatch-simple=s" => \$o_mismatch_simple,
            "show-mismatches"   => \$o_show_mismatches,
@@ -366,10 +353,9 @@ die $usage if $o_help;
 
 print STDERR "Threads are ".($with_threads ? "" : "not ")."available\n" if $o_verbose;
 print STDERR "The recommended re:engine::RE2 module for faster matching is ".($with_RE2 ? "" : "not ")."available\n" if $o_verbose;
-say STDERR;
 
 #die "only one primer pair currently supported" if @o_pf > 1 or @o_pr > 1;
-die "must provide sequence to search with --ref" if not $o_ref;
+die "must provide sequence to search using the --ref option" if not $o_ref;
 
 ## --mismatch-simple option processing
 if ($o_mismatch_simple) {
@@ -431,8 +417,6 @@ sub remove_duplicate_intervals($);  # remove intervals with duplicate beg, end
 sub dump_primer_hits($$$);  # dump primer-only intervals
 sub dump_amplicon_internal_hits($$$);  # calculate and dump amplicons and internal hits
 
-sub iftag  { return $tag ? "$tag:"  : ""; }
-sub iftags { return $tag ? "$tag: " : " "; }
 sub trunc($) {
     my $s = shift;
     return $s if $o_no_trunc;
@@ -451,23 +435,11 @@ sub diefile($) { my $f = shift; die "could not open '$f' :$!"; }
 
 my @forward_primers;
 my @reverse_primers;
-my $forward_primer;
-my $reverse_primer;
 
-if ($o_pi) {
-    my ($ptag, $pdir, $pseq) = split(/:/, $o_pf_preset[$o_pi - 1], 3);
-    $tag = $ptag;
-    die "Forward primer direction not one of F, f: '$pdir'" if uc($pdir) ne "F";
-    $forward_primer = $pseq;
-    push @forward_primers, [ $ptag, $pdir, $pseq ];
-    ($ptag, $pdir, $pseq) = split(/:/, $o_pr_preset[$o_pi - 1], 3);
-    die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
-    die "Reverse primer direction not one of R, r: '$pdir'" if uc($pdir) ne "R";
-    $reverse_primer = $pseq;
-    push @reverse_primers, [ $ptag, $pdir, $pseq ];
-    print STDERR "Loaded predefined forward and reverse primers from index $o_pi, with tag '$tag'\n";
-} elsif ($o_primers) {
+if ($o_primers) {
     my $pfile = Bio::SeqIO->new(-file => "<$o_primers", -format => 'fasta') or diefile($o_primers);
+    my $forward_primer;
+    my $reverse_primer;
     while (my $pseq = $pfile->next_seq()) {
         my $pid = $pseq->display_id();
         my ($ptag, $pdir) = split(/:/, $pid, 2);
@@ -476,68 +448,73 @@ if ($o_pi) {
         if (! $forward_primer and uc($pdir) eq "F") {
             $forward_primer = $seq;
             push @forward_primers, [ $ptag, $pdir, $seq ];
-            if (! $tag) {
-                $tag = $ptag;
-            } else {
-                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
-            }
         } elsif (! $reverse_primer and uc($pdir) eq "R") {
             $reverse_primer = $seq;
             push @reverse_primers, [ $ptag, $pdir, $seq ];
-            if (! $tag) {
-                $tag = $ptag;
-            } else {
-                die "Primer tags do not match: '$tag', '$ptag'" if $tag ne $ptag;
-            }
         } else {
             die "$o_primers must contain one forward and one reverse primer sequence";
         }
     }
-    print STDERR "Loaded forward and reverse primers from file '$o_primers', with tag '$tag'\n";
+    print STDERR "Loaded forward and reverse primers from file '$o_primers'\n";
 } else {
-    # die "No primer pair specified (--pf and --pr options not yet completed)";
     foreach my $p (@o_pf) {
         my ($ptag, $pdir, $pseq) = split(/:/, $p, 3);
+        die "Primers specified with --pf must have format tag:F:sequence, see '$0 --help'" if not $pdir or not $pseq;
         push @forward_primers, [ $ptag, $pdir, $pseq ];
     }
     foreach my $p (@o_pr) {
         my ($ptag, $pdir, $pseq) = split(/:/, $p, 3);
+        die "Primers specified with --pr must have format tag:R:sequence, see '$0 --help'" if not $pdir or not $pseq;
         push @reverse_primers, [ $ptag, $pdir, $pseq ];
     }
 }
-die "Must provide results tag" if not $tag;
+die "Please specify a primer pair" if ! @forward_primers or ! @reverse_primers;
+die "Please use one forward and one reverse primer" if @forward_primers > 1 or @reverse_primers > 1;
+die "Please use the same number of forward and reverse primers" if @forward_primers != @reverse_primers;
+
+foreach (0..$#forward_primers) {
+    die "Primer tags must be provided on primer sequences" if not $forward_primers[$_]->[0] or not $reverse_primers[$_]->[0];
+    die "Primer tags do not match: '$forward_primers[$_]->[0]', '$reverse_primers[$_]->[0]'" if $forward_primers[$_]->[0] ne $reverse_primers[$_]->[0];
+}
 
 my %forward;
 my %reverse;
 
+my $ppi = 0;
+
 if ($with_threads) {  # we have at least 2 threads
-    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primer);
-    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primer);
+    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primers[$ppi]);
+    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primers[$ppi]);
     print STDERR "Preparing forward and reverse primers with threads $forward_t and $reverse_t ...\n" if $o_verbose;
     %forward = $forward_t->join();
     %reverse = $reverse_t->join();
 } else {
-    %forward = prepare_primer($forward_primer);
-    %reverse = prepare_primer($reverse_primer);
+    %forward = prepare_primer($forward_primers[$ppi]);
+    %reverse = prepare_primer($reverse_primers[$ppi]);
 }
 
 
 print STDERR "
 Primer sequences as given:
+";
+foreach (0..$#forward_primers) {
+    print STDERR "
+ forward $forward_primers[$_]->[0] : $forward_primers[$_]->[2], ".length($forward_primers[$_]->[2])." bp
+ reverse $reverse_primers[$_]->[0] : $reverse_primers[$_]->[2], ".length($reverse_primers[$_]->[2])." bp
+"
+}
 
-".iftags()."forward primer : $forward_primer, ".length($forward_primer)." bp
-".iftags()."reverse primer : $reverse_primer, ".length($reverse_primer)." bp
-
+print STDERR "
 Patterns matching unrolled primers";
 if ($o_mismatch_simple) {
     print STDERR " after applying '--mismatch-simple $o_mismatch_simple'";
 }
 print STDERR ":
 
-".iftags()."forward   : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences
-".iftags()."forward rc: ".trunc($forward{revcomppattern}).", same number in reverse complement
-".iftags()."reverse   : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences
-".iftags()."reverse rc: ".trunc($reverse{revcomppattern}).", same number in reverse complement
+ forward $forward{tag}    : ".trunc($forward{forwardpattern}).", $forward{count} unique sequences
+ forward $forward{tag} rc : ".trunc($forward{revcomppattern}).", same number in reverse complement
+ reverse $reverse{tag}    : ".trunc($reverse{forwardpattern}).", $reverse{count} unique sequences
+ reverse $reverse{tag} rc : ".trunc($reverse{revcomppattern}).", same number in reverse complement
 ";
 
 exit 0 if $o_count_only;
@@ -671,10 +648,10 @@ while (my $inseq = $in->next_seq()) {
     my $this_seqname = $inseq->display_id();
     my $this_sequence = $inseq->seq();
     if ($o_unassigned_prefix and $this_seqname =~ /^$o_unassigned_prefix/) {
-        print STDERR "${o_unassigned_prefix}*:".iftag()." searching ...\n" if not $Un;
+        print STDERR "${o_unassigned_prefix}*: searching ...\n" if not $Un;
         ++$Un;
     } else {
-        print STDERR "$this_seqname:".iftag()." searching ...\n";
+        print STDERR "$this_seqname: searching ...\n";
     }
 
     # Any _forward_hits can be complemented by any _revcomp_hits
@@ -833,7 +810,7 @@ while (my $inseq = $in->next_seq()) {
 
     next if not @forward_hits and not @revcomp_hits;  # no hits found
 
-    print STDERR $this_seqname.":".iftag().
+    print STDERR $this_seqname.":".
                  " forward hits ".scalar(@forward_hits)." ($n_forward_dups dups),".
                  " revcomp hits ".scalar(@revcomp_hits)." ($n_revcomp_dups dups)\n";
 
@@ -904,8 +881,9 @@ sub expand_dot($) {
 # This should accept a single primer sequence at at time, as it does, and
 # should return a list of hash references filled according to the
 #
-sub prepare_primer($$$) {
-    my ($primer_tag, $primer_orientation, $primer_sequence) = @_;
+sub prepare_primer($) {
+    my $p = shift;
+    my ($primer_tag, $primer_orientation, $primer_sequence) = @$p;
     # $primer_tag is the orientation of the primer itself
     # $primer_orientation is the orientation of the primer itself
     #    F for forward, 5'-3', Watson strand
@@ -1396,7 +1374,7 @@ sub dump_primer_hits($$$) {
 
     my @all_hits = sort { $a->[0] <=> $b->[0] } ( @$forward_hits, @$revcomp_hits );
     my $n_all_dups = remove_duplicate_intervals(\@all_hits);
-    print STDERR "dump_primer_hits: $seqname:".iftag()." all hits ".
+    print STDERR "dump_primer_hits: $seqname: all hits ".
                  scalar(@all_hits)." ($n_all_dups dups)\n" if $o_verbose;
 
     return if not $o_primerbed and not $o_primerseq;
@@ -1463,7 +1441,7 @@ sub dump_amplicon_internal_hits($$$) {
     my $n_dup = remove_duplicate_intervals(\@amp);
     my $n_short_dup = remove_duplicate_intervals(\@amp_short);
     my $n_long_dup = remove_duplicate_intervals(\@amp_long);
-    print STDERR $seqname.":".iftag().
+    print STDERR $seqname.":".
                  " amplicons ".scalar(@amp)." ($n_dup dups),".
                  " tooshort ".scalar(@amp_short)." ($n_short_dup dups),".
                  " toolong ".scalar(@amp_long)." ($n_long_dup dups)\n";
