@@ -1,32 +1,7 @@
-TODO -- branch new-primers
-----
-
-* Allow tags to tag individual primers, and include indication of forward or reverse orientation
-* Allow threads in all circumstances
-* Indicate primer hits that overlap, perhaps add `--report-overlap`
-* Pass full primer hash to match routines?
-* multiple primer pairs
-* fuzzy matching?
-* Begin writing
-* Generalise request for DFA memory (the -max_mem argument to re::engine::RE2)
-
-Thoughts re: addressing multiple issues above:
-
-* how to implement separate tags
-  * check for unique tags across forward primers
-  * note primer pairs sharing a tag
-* how to implement multiplexed primers
-  * build a queue of forward primers to search and build a queue of reverse primers to search
-  * perhaps just build a queue of primers to search, with orientations part of the queue, this would require making orientation abstracted in the primer info queue
-* how to implement flexible use of threads
-  * work through a queue of primer searches
-* how to implement --orientation
-  * do i want this?  i think so... it is easier for the user than post-filtering, it could easily be implemented with a queue... primer orientations are added to the queue, or not
-
-
 DONE
 ----
 
+* Remove predefined primers
 * Generalise use of generic unassigned-scaffold prefix to compress reporting (use --unassigned-prefix STRING)
 * The `--primers` option may be used to load primer sequences from a Fasta file
 * The `--pf` and `--pr` options may be used to specify primer sequences on the command line
