@@ -480,17 +480,15 @@ foreach (0..$#forward_primers) {
 my %forward;
 my %reverse;
 
-my $ppi = 0;
-
 if ($with_threads) {  # we have at least 2 threads
-    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primers[$ppi]);
-    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primers[$ppi]);
+    my $forward_t = threads->create({'context' => 'list'}, \&prepare_primer, $forward_primers[0]);
+    my $reverse_t = threads->create({'context' => 'list'}, \&prepare_primer, $reverse_primers[0]);
     print STDERR "Preparing forward and reverse primers with threads $forward_t and $reverse_t ...\n" if $o_verbose;
     %forward = $forward_t->join();
     %reverse = $reverse_t->join();
 } else {
-    %forward = prepare_primer($forward_primers[$ppi]);
-    %reverse = prepare_primer($reverse_primers[$ppi]);
+    %forward = prepare_primer($forward_primers[0]);
+    %reverse = prepare_primer($reverse_primers[0]);
 }
 
 
