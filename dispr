@@ -1368,7 +1368,7 @@ sub remove_duplicate_intervals($) {
 #
 sub dump_primer_hits($$$) {
     my ($bioseq, $forward_hits, $revcomp_hits) = @_;
-    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
+    my ($seqname, $seqdesc, $seq) = ($bioseq->display_id(), $bioseq->desc(), $bioseq->seq());
 
     my @all_hits = sort { $a->[0] <=> $b->[0] } ( @$forward_hits, @$revcomp_hits );
     my $n_all_dups = remove_duplicate_intervals(\@all_hits);
@@ -1389,10 +1389,12 @@ sub dump_primer_hits($$$) {
         if ($o_primerseq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
+	    #$name .= ":$seqdesc" if $seqdesc; 
             $name .= ":$tag" if $tag;
             $name .= ":$id";
             $name .= "," . $h->[4] if $o_show_mismatches;
             my $hitseq = Bio::Seq->new(-id => $name,
+				       -desc => $seqdesc,
                                        -seq => $h->[2],
                                        -alphabet => 'dna');
             $out_primerseq->write_seq($hitseq);
@@ -1408,7 +1410,8 @@ sub dump_primer_hits($$$) {
 #
 sub dump_amplicon_internal_hits($$$) {
     my ($bioseq, $forward_hits, $revcomp_hits) = @_;
-    my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
+    #my ($seqname, $seq) = ($bioseq->display_id(), $bioseq->seq());
+    my ($seqname, $seqdesc, $seq) = ($bioseq->display_id(), $bioseq->desc(), $bioseq->seq());
     # amplicons extend between forward_hits->[0] and revcomp_hits->[1]
     # internal regions extend between forward_hits->[1] and revcomp_hits->[0]
     my @amp_short; # too short  0 <=      < $o_min
@@ -1457,6 +1460,7 @@ sub dump_amplicon_internal_hits($$$) {
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$tag:".$h->[3].":".length($h->[2]);
             $name .= "," . $h->[7] if $o_show_mismatches;
             $out_seq->write_seq(Bio::Seq->new(-id => $name,
+					      -desc => $seqdesc,
                                               -seq => $h->[2],
                                               -alphabet => 'dna'));
         }
@@ -1471,6 +1475,7 @@ sub dump_amplicon_internal_hits($$$) {
             $name .= "," . $h->[7] if $o_show_mismatches;
             $out_internalseq->write_seq(Bio::Seq->new(-id => $name,
                                                       -seq => $h->[6],
+						      -desc => $seqdesc,
                                                       -alphabet => 'dna'));
         }
     }
