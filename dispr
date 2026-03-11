@@ -1389,12 +1389,11 @@ sub dump_primer_hits($$$) {
         if ($o_primerseq) {
             # use base-1 GFF-type intervals in Fasta name
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1];
-	    #$name .= ":$seqdesc" if $seqdesc; 
             $name .= ":$tag" if $tag;
             $name .= ":$id";
             $name .= "," . $h->[4] if $o_show_mismatches;
             my $hitseq = Bio::Seq->new(-id => $name,
-				       -desc => $seqdesc,
+				                       -desc => $seqdesc,
                                        -seq => $h->[2],
                                        -alphabet => 'dna');
             $out_primerseq->write_seq($hitseq);
@@ -1460,7 +1459,7 @@ sub dump_amplicon_internal_hits($$$) {
             my $name = "$seqname:".($h->[0] + 1)."-".$h->[1].":$tag:".$h->[3].":".length($h->[2]);
             $name .= "," . $h->[7] if $o_show_mismatches;
             $out_seq->write_seq(Bio::Seq->new(-id => $name,
-					      -desc => $seqdesc,
+					                          -desc => $seqdesc,
                                               -seq => $h->[2],
                                               -alphabet => 'dna'));
         }
